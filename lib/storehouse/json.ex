@@ -2,25 +2,32 @@ defmodule Storehouse.JSON do
   @moduledoc false
 
   # Storehouse's JSON, in one place: every part of it that encodes or
-  # decodes JSON calls this module, never a library. Elixir's own JSON
-  # (1.18 and later) when it is there, else Jason.
+  # decodes JSON calls this module, never a library. The library is the
+  # app's choice:
+  #
+  #     config :storehouse, :json_library, Jason
+  #
+  # and by default Elixir's own JSON (1.18 and later) when it is there,
+  # else Jason.
 
-  cond do
-    Code.ensure_loaded?(JSON) ->
-      defdelegate encode!(data), to: JSON
-      defdelegate encode_to_iodata!(data), to: JSON
-      defdelegate decode(data), to: JSON
-      defdelegate decode!(data), to: JSON
+  @default (cond do
+              Code.ensure_loaded?(JSON) -> JSON
+              Code.ensure_loaded?(Jason) -> Jason
+              true -> nil
+            end)
 
-    Code.ensure_loaded?(Jason) ->
-      defdelegate encode!(data), to: Jason
-      defdelegate encode_to_iodata!(data), to: Jason
-      defdelegate decode(data), to: Jason
-      defdelegate decode!(data), to: Jason
-
-    true ->
-      message = "Storehouse needs a JSON library: Elixir 1.18 or later, or `:jason` in your deps."
-
-      IO.warn(message, Macro.Env.stacktrace(__ENV__))
+  if is_nil(@default) do
+    IO.warn(
+      "Storehouse needs a JSON library: Elixir 1.18 or later, or `:jason` in your deps.",
+      Macro.Env.stacktrace(__ENV__)
+    )
   end
+
+  @doc false
+  def library, do: Application.get_env(:storehouse, :json_library, @default)
+
+  def encode!(data), do: library().encode!(data)
+  def encode_to_iodata!(data), do: library().encode_to_iodata!(data)
+  def decode(data), do: library().decode(data)
+  def decode!(data), do: library().decode!(data)
 end

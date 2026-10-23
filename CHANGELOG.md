@@ -44,9 +44,11 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Changed
 
-- Storehouse's JSON is in one place, `Storehouse.JSON`: Elixir's own
-  `JSON` when it is there, else Jason. No other part of it calls a JSON
-  library.
+- Storehouse's JSON is in one place, `Storehouse.JSON`: the app's
+  `config :storehouse, :json_library`, else Elixir's own `JSON` when it
+  is there, else Jason. No other part of it calls a JSON library.
+- Storehouse takes Elixir 1.17 (with Jason, which 1.17 needs for JSON),
+  and CI tests it there too.
 
 - `Storehouse.Ecto.delete_files/2` (and so `update/3` and `delete/3`)
   deletes through `Storehouse.delete_later/2`: retried by the cleaner when

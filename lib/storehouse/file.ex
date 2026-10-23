@@ -24,8 +24,8 @@ defmodule Storehouse.File do
 
   ## In JSON
 
-  A file encodes as JSON (`JSON.Encoder`, and `Jason.Encoder` when Jason is
-  there) with its fields and the app's metadata, but not the analysis's:
+  A file encodes as JSON (`JSON.Encoder` on Elixir 1.18 and later, and
+  `Jason.Encoder` when Jason is there) with its fields and the app's metadata, but not the analysis's:
   what a file's EXIF says can hold where a photo was taken.
   `to_map/2` chooses what goes.
   """
@@ -156,8 +156,10 @@ defmodule Storehouse.File do
     end
   end
 
-  defimpl JSON.Encoder do
-    def encode(file, encoder), do: JSON.Encoder.encode(Storehouse.File.to_map(file), encoder)
+  if Code.ensure_loaded?(JSON.Encoder) do
+    defimpl JSON.Encoder do
+      def encode(file, encoder), do: JSON.Encoder.encode(Storehouse.File.to_map(file), encoder)
+    end
   end
 
   if Code.ensure_loaded?(Jason.Encoder) do

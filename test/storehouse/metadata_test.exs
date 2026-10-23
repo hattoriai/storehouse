@@ -101,8 +101,11 @@ defmodule Storehouse.MetadataTest do
       {:ok, file} = Storehouse.File.put_analyzed(file, :exif, %{gps: [38.7, -9.1]})
       {:ok, file} = Storehouse.File.put_analyzed(file, :placeholder, %{color: "#2a2722"})
 
-      for json <- [JSON.encode!(file), Jason.encode!(file)] do
-        decoded = JSON.decode!(json)
+      # Elixir's JSON (1.18 and later), and Jason.
+      libraries = Enum.filter([JSON, Jason], &Code.ensure_loaded?/1)
+
+      for library <- libraries, json = library.encode!(file) do
+        decoded = Storehouse.JSON.decode!(json)
         assert decoded["url"] == "/uploads/2026/10/a.jpg"
         assert decoded["metadata"] == %{"caption" => "Quay"}
         refute json =~ "gps"
