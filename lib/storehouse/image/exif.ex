@@ -1,9 +1,9 @@
-defmodule Storehouse.Exif do
+defmodule Storehouse.Image.Exif do
   @moduledoc false
   # Exif, a TIFF of tags, as JPEG, PNG and WebP keep it: where a photo
   # was taken removed, only some tags kept, text tags written, read. The
-  # formats' own modules (`Storehouse.JPEG`, `Storehouse.PNG`,
-  # `Storehouse.WebP`) find it in the file, and give it here.
+  # formats' own modules (`Storehouse.Image.JPEG`, `Storehouse.Image.PNG`,
+  # `Storehouse.Image.WebP`) find it in the file, and give it here.
 
   @gps_ifd 0x8825
   @exif_ifd 0x8769

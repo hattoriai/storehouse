@@ -140,14 +140,16 @@ defmodule Storehouse.MixProject do
           Storehouse.Analyzer.Placeholder,
           Storehouse.Analyzer.ThumbHash,
           Storehouse.Analyzer.BlurHash,
-          Storehouse.ThumbHash,
-          Storehouse.BlurHash,
-          Storehouse.Analyzer.EditMetadata,
-          Storehouse.MetadataEditor,
-          Storehouse.MetadataEditor.Builtin,
-          Storehouse.JPEG,
-          Storehouse.PNG,
-          Storehouse.WebP
+          Storehouse.Analyzer.EditMetadata
+        ],
+        Images: [
+          Storehouse.Image.ThumbHash,
+          Storehouse.Image.BlurHash,
+          Storehouse.Image.MetadataEditor,
+          Storehouse.Image.MetadataEditor.Builtin,
+          Storehouse.Image.JPEG,
+          Storehouse.Image.PNG,
+          Storehouse.Image.WebP
         ],
         Variants: [
           Storehouse.Variants,

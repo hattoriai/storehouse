@@ -1,4 +1,4 @@
-defmodule Storehouse.JPEG do
+defmodule Storehouse.Image.JPEG do
   @moduledoc """
   Edits the metadata inside a JPEG without re-encoding it: removes where a
   photo was taken, keeps only a few tags, or writes an author's name, and
@@ -11,12 +11,12 @@ defmodule Storehouse.JPEG do
   Re-encoding with an image library (libvips, ImageMagick) would lose
   quality and change the file.
 
-      {:ok, jpeg} = Storehouse.JPEG.strip(jpeg, :gps)
-      {:ok, jpeg} = Storehouse.JPEG.strip(jpeg, {:keep, [:orientation, :copyright]})
-      {:ok, jpeg} = Storehouse.JPEG.put_tags(jpeg, %{artist: "Ana Sousa", copyright: "© Ana Sousa"})
+      {:ok, jpeg} = Storehouse.Image.JPEG.strip(jpeg, :gps)
+      {:ok, jpeg} = Storehouse.Image.JPEG.strip(jpeg, {:keep, [:orientation, :copyright]})
+      {:ok, jpeg} = Storehouse.Image.JPEG.put_tags(jpeg, %{artist: "Ana Sousa", copyright: "© Ana Sousa"})
 
   `edit_file/3` does the same from a file to a file, with only the
-  metadata in memory: what `Storehouse.MetadataEditor.Builtin`, the
+  metadata in memory: what `Storehouse.Image.MetadataEditor.Builtin`, the
   default editor of the `Storehouse.Analyzer.EditMetadata` step, uses.
 
   Nothing in Storehouse calls these on its own: a stored file's bytes
@@ -35,15 +35,15 @@ defmodule Storehouse.JPEG do
     * Place names: `strip(jpeg, :gps)` removes coordinates, not a city an
       app or a person wrote in IPTC or XMP.
     * Other formats: these functions refuse them with `{:error,
-      :not_jpeg}`. `Storehouse.PNG` and `Storehouse.WebP` edit those two
+      :not_jpeg}`. `Storehouse.Image.PNG` and `Storehouse.Image.WebP` edit those two
       the same way; HEIC and TIFF are left to another editor
-      (`Storehouse.MetadataEditor`).
+      (`Storehouse.Image.MetadataEditor`).
 
   A JPEG whose segments or Exif cannot be read is refused with `{:error,
   :malformed}` or `{:error, :malformed_exif}`, never cut short.
   """
 
-  alias Storehouse.Exif
+  alias Storehouse.Image.Exif
 
   @exif "Exif\0\0"
   @xmp "http://ns.adobe.com/xap/1.0/\0"
@@ -85,8 +85,8 @@ defmodule Storehouse.JPEG do
 
   ## Examples
 
-      iex> {:ok, jpeg} = Storehouse.JPEG.put_tags(File.read!("test/fixtures/harbour.jpg"), %{artist: "Ana"})
-      iex> Storehouse.JPEG.tags(jpeg)
+      iex> {:ok, jpeg} = Storehouse.Image.JPEG.put_tags(File.read!("test/fixtures/harbour.jpg"), %{artist: "Ana"})
+      iex> Storehouse.Image.JPEG.tags(jpeg)
       {:ok, %{artist: "Ana"}}
 
   """
@@ -98,7 +98,7 @@ defmodule Storehouse.JPEG do
   The JPEG with `changes` made: `:strip` (as `strip/2`), then `:put` (as
   `put_tags/2`).
   """
-  @spec edit(binary(), Storehouse.MetadataEditor.changes()) ::
+  @spec edit(binary(), Storehouse.Image.MetadataEditor.changes()) ::
           {:ok, binary()} | {:error, reason()}
   def edit(jpeg, changes) when is_binary(jpeg) and is_list(changes) do
     change = changer(changes)
@@ -119,7 +119,7 @@ defmodule Storehouse.JPEG do
   memory of its metadata. `:unchanged` when there is nothing to change,
   and `to` is not written.
   """
-  @spec edit_file(Path.t(), Path.t(), Storehouse.MetadataEditor.changes()) ::
+  @spec edit_file(Path.t(), Path.t(), Storehouse.Image.MetadataEditor.changes()) ::
           :ok | :unchanged | {:error, reason() | File.posix()}
   def edit_file(from, to, changes) when is_list(changes) do
     change = changer(changes)

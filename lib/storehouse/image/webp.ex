@@ -1,7 +1,7 @@
-defmodule Storehouse.WebP do
+defmodule Storehouse.Image.WebP do
   @moduledoc """
   Edits the metadata inside a WebP without re-encoding it, as
-  `Storehouse.JPEG` does a JPEG's: the same changes, the same tags.
+  `Storehouse.Image.JPEG` does a JPEG's: the same changes, the same tags.
 
   A WebP keeps its metadata in chunks of its own, `EXIF` and `XMP `,
   which the `VP8X` header lists. These functions rewrite those chunks and
@@ -24,7 +24,7 @@ defmodule Storehouse.WebP do
 
   import Bitwise
 
-  alias Storehouse.{Container, Exif}
+  alias Storehouse.Image.{Container, Exif}
 
   @metadata ["VP8X", "EXIF", "XMP "]
   # What draws the image: kept by `strip: {:keep, tags}`.
@@ -38,8 +38,8 @@ defmodule Storehouse.WebP do
   @typedoc "Why a WebP is refused."
   @type reason :: :not_webp | :malformed | :malformed_exif
 
-  @doc "The WebP with `changes` made (`Storehouse.MetadataEditor`): `:strip`, then `:put`."
-  @spec edit(binary(), Storehouse.MetadataEditor.changes()) ::
+  @doc "The WebP with `changes` made (`Storehouse.Image.MetadataEditor`): `:strip`, then `:put`."
+  @spec edit(binary(), Storehouse.Image.MetadataEditor.changes()) ::
           {:ok, binary()} | {:error, reason()}
   def edit(webp, changes) when is_binary(webp) and is_list(changes) do
     change = changer(changes)
@@ -57,7 +57,7 @@ defmodule Storehouse.WebP do
   with only its metadata in memory. `:unchanged` when there is nothing to
   change, and `to` is not written.
   """
-  @spec edit_file(Path.t(), Path.t(), Storehouse.MetadataEditor.changes()) ::
+  @spec edit_file(Path.t(), Path.t(), Storehouse.Image.MetadataEditor.changes()) ::
           :ok | :unchanged | {:error, reason() | File.posix()}
   def edit_file(from, to, changes) when is_list(changes) do
     change = changer(changes)
@@ -74,7 +74,7 @@ defmodule Storehouse.WebP do
     end
   end
 
-  @doc "The named tags its Exif has (`Storehouse.JPEG.tags/1`)."
+  @doc "The named tags its Exif has (`Storehouse.Image.JPEG.tags/1`)."
   @spec tags(binary()) :: {:ok, map()} | {:error, reason()}
   def tags(webp) when is_binary(webp) do
     with {:ok, chunks, _tail} <- parse(webp) do

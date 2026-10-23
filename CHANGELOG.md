@@ -85,7 +85,7 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   shrinking it as it loads, turned as its EXIF says, in sRGB, with none of
   its metadata. Or as a hash, for a frontend to decode:
   `Storehouse.Analyzer.ThumbHash` and `Storehouse.Analyzer.BlurHash`, of
-  `Storehouse.ThumbHash` and `Storehouse.BlurHash`, encoders in plain
+  `Storehouse.Image.ThumbHash` and `Storehouse.Image.BlurHash`, encoders in plain
   Elixir that give the reference implementations' bytes.
 - Archives: `Storehouse.Archive` makes an archive of stored files,
   binaries, the app's functions and streams as a stream (`stream/2`), into
@@ -137,7 +137,7 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   it. A file streamed to S3 in one request now keeps its checksum there
   too.
 - Editing a photo's metadata without re-encoding it, only when asked:
-  `Storehouse.JPEG` removes the location (`strip(jpeg, :gps)`, the Exif
+  `Storehouse.Image.JPEG` removes the location (`strip(jpeg, :gps)`, the Exif
   GPS directory zeroed and XMP's GPS properties removed), keeps only the
   tags named (`strip(jpeg, {:keep, tags})`), and writes the author's
   name, copyright and description (`put_tags/2`), in a JPEG's own
@@ -146,18 +146,18 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   is the step that writes the edited file back over the original, its
   checksum and size now in its result, while the file's `:checksum`
   stays the upload's. It reads only a photo's metadata into memory
-  (`Storehouse.JPEG.edit_file/3`). What makes the changes is a
-  `Storehouse.MetadataEditor`, Storehouse's own (`Builtin`, JPEG) unless
+  (`Storehouse.Image.JPEG.edit_file/3`). What makes the changes is a
+  `Storehouse.Image.MetadataEditor`, Storehouse's own (`Builtin`, JPEG) unless
   the step's `:editor` or `config :storehouse, :metadata_editor` names
   one of the app's, around ExifTool for other types. A step may now give
   `{:ok, result, path}`: the steps after it read the file it left.
-- PNG and WebP metadata, edited as a JPEG's: `Storehouse.PNG` (Exif,
+- PNG and WebP metadata, edited as a JPEG's: `Storehouse.Image.PNG` (Exif,
   XMP and text chunks, each with its checksum; written tags also as the
   `Author`, `Copyright` and `Description` text readers show; an APNG's
-  frames copied) and `Storehouse.WebP` (Exif and XMP chunks, and the
+  frames copied) and `Storehouse.Image.WebP` (Exif and XMP chunks, and the
   `VP8X` header's flags; a simple WebP given a header when it is given
   Exif; an animation's frames copied), both reading only the metadata
-  chunks into memory. `Storehouse.MetadataEditor.Builtin` edits all
+  chunks into memory. `Storehouse.Image.MetadataEditor.Builtin` edits all
   three.
 - Reading a file back: `Storehouse.head/2` (its size, stored type and
   checksum, without reading it), `Storehouse.read/2` (all of it, refused

@@ -1,12 +1,12 @@
-defmodule Storehouse.JPEGTest do
+defmodule Storehouse.Image.JPEGTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Storehouse.JPEG
+  alias Storehouse.Image.JPEG
 
-  @harbour File.read!(Path.expand("../fixtures/harbour.jpg", __DIR__))
-  @camera File.read!(Path.expand("../fixtures/exif/camera.jpg", __DIR__))
-  @phone File.read!(Path.expand("../fixtures/exif/phone.jpg", __DIR__))
+  @harbour File.read!(Path.expand("../../fixtures/harbour.jpg", __DIR__))
+  @camera File.read!(Path.expand("../../fixtures/exif/camera.jpg", __DIR__))
+  @phone File.read!(Path.expand("../../fixtures/exif/phone.jpg", __DIR__))
 
   @exif "Exif\0\0"
   @xmp "http://ns.adobe.com/xap/1.0/\0"
@@ -316,7 +316,7 @@ defmodule Storehouse.JPEGTest do
 
   describe "what it refuses" do
     test "not a JPEG" do
-      png = File.read!(Path.expand("../fixtures/small.png", __DIR__))
+      png = File.read!(Path.expand("../../fixtures/small.png", __DIR__))
       assert JPEG.strip(png, :gps) == {:error, :not_jpeg}
       assert JPEG.put_tags(png, %{artist: "Ana"}) == {:error, :not_jpeg}
       assert JPEG.tags(png) == {:error, :not_jpeg}

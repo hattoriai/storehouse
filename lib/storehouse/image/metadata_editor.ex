@@ -1,8 +1,8 @@
-defmodule Storehouse.MetadataEditor do
+defmodule Storehouse.Image.MetadataEditor do
   @moduledoc """
   What edits the metadata inside a stored file for the
   `Storehouse.Analyzer.EditMetadata` step: Storehouse's own
-  (`Storehouse.MetadataEditor.Builtin`, in Elixir, for JPEG, PNG and
+  (`Storehouse.Image.MetadataEditor.Builtin`, in Elixir, for JPEG, PNG and
   WebP), or one of
   the app's, around ExifTool, a NIF, a service.
 
@@ -10,7 +10,7 @@ defmodule Storehouse.MetadataEditor do
 
     * `strip: :gps` - where the photo was taken.
     * `strip: {:keep, tags}` - all metadata but the tags named
-      (`Storehouse.JPEG` lists them by name), and what draws the image.
+      (`Storehouse.Image.JPEG` lists them by name), and what draws the image.
     * `put: %{artist: _, copyright: _, image_description: _}` - tags
       written, or removed with `nil`, after `:strip`.
 
@@ -29,7 +29,7 @@ defmodule Storehouse.MetadataEditor do
   the formats Storehouse's does not:
 
       defmodule MyApp.ExifTool do
-        @behaviour Storehouse.MetadataEditor
+        @behaviour Storehouse.Image.MetadataEditor
 
         @tags %{artist: "Artist", copyright: "Copyright", image_description: "ImageDescription"}
 
@@ -66,6 +66,6 @@ defmodule Storehouse.MetadataEditor do
   @spec editor(keyword()) :: module()
   def editor(opts) do
     opts[:editor] ||
-      Application.get_env(:storehouse, :metadata_editor, Storehouse.MetadataEditor.Builtin)
+      Application.get_env(:storehouse, :metadata_editor, Storehouse.Image.MetadataEditor.Builtin)
   end
 end
