@@ -206,9 +206,8 @@ if Code.ensure_loaded?(Ecto.Changeset) do
       do: Enum.flat_map(file_fields(record), &List.wrap(Map.get(record, &1)))
 
     @doc """
-    Deletes files from the store (`Storehouse.delete_later/2`): queued in
-    `Storehouse.Cleaner`, and tried again when the store fails, when the app
-    runs it; at once otherwise.
+    Deletes files from the store (`Storehouse.delete_later/2`): jobs of the
+    app's runner (`Storehouse.Runner`), tried again when the store fails.
     """
     @spec delete_files([Storehouse.File.t()], keyword()) :: :ok
     def delete_files(files, opts \\ []) do
@@ -313,7 +312,7 @@ if Code.ensure_loaded?(Ecto.Changeset) do
     with `analyze: [avatar: steps]`.
 
     Takes the options of `Storehouse.analyze_later/3` but `:then`
-    (`:runner`, `:oban`, `:force`, `:max_bytes`, `:adapter`).
+    (`:runner`, `:force`, `:max_bytes`, `:adapter`).
     """
     @spec analyze_later(module(), struct(), atom(), [Storehouse.Analyzer.step()], keyword()) ::
             :ok
@@ -328,7 +327,7 @@ if Code.ensure_loaded?(Ecto.Changeset) do
 
       later =
         opts
-        |> Keyword.take([:runner, :oban, :force, :max_bytes])
+        |> Keyword.take([:runner, :force, :max_bytes])
         |> Keyword.merge(store_opts(record, field, opts))
 
       for file <- files,

@@ -38,11 +38,11 @@ defmodule Storehouse.Analyzer do
 
   ## Later
 
-  `Storehouse.analyze_later/3` runs them out of the request: in a process
-  of the app's (`Storehouse.Tasks`), or in Oban (`runner: :oban`) for work
-  that must outlive a deploy; then the app's `:then` function gets the file
-  with its results, to save them. `Storehouse.Ecto.analyze_later/5` saves
-  them in the record's column.
+  `Storehouse.analyze_later/3` runs them out of the request, as a job of
+  the app's runner (`Storehouse.Runner`: Oban's, a process of the app's,
+  or one of its own); then the app's `:then` function gets the file with
+  its results, to save them. `Storehouse.Ecto.analyze_later/5` saves them
+  in the record's column.
 
   ## Telemetry
 

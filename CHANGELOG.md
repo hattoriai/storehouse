@@ -9,6 +9,17 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Added
 
+- Work out of the request, on a runner the app chooses
+  (`Storehouse.Runner`): a file's analysis later, deletions later and a
+  mirror's copies are jobs (`Storehouse.Job`, a worker and arguments JSON
+  holds), kept and retried by the runner. `Storehouse.Runner.Oban` keeps
+  them in Oban, through deploys, on the queue and instance of
+  `config :storehouse, Storehouse.Runner.Oban`, and is the default when
+  the app runs Oban; `Storehouse.Runner.Memory` keeps them in a process of
+  the app's otherwise; an app's own module (another job system, a
+  workflow engine) takes either's place, in `config :storehouse, :runner`
+  or a call's `:runner`. Telemetry `[:storehouse, :job, ...]` for each
+  run and each job given up.
 - Moving between stores: `Storehouse.copy/2` copies a file from one
   store to another (in S3 itself between buckets the same credentials
   reach, on the disk between two local stores, else a chunk at a time
@@ -16,7 +27,7 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   several at once, skipping those already there, so it can run again;
   `mix storehouse.copy` runs it with its progress. `Storehouse.Mirror` is
   a store that writes to a primary and copies each file to its mirrors
-  through `Storehouse.Cleaner`, retried until they answer, never failing
+  as jobs of the app's runner, retried until they answer, never failing
   the primary's write. The optional adapter callback `uploaded/1` is told
   of a file uploaded straight to the store once `verify_upload/2` keeps
   it. A file streamed to S3 in one request now keeps its checksum there
@@ -55,11 +66,11 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   time) and `Storehouse.delete_prefix/2` (a thousand at a time, with S3's
   DeleteObjects), with the optional adapter callbacks `list/1` and
   `delete_many/1`. `Storehouse.delete_later/2` and
-  `Storehouse.delete_prefix_later/2` queue deletions in
-  `Storehouse.Cleaner`, a process of the app's that tries them again until
-  the store answers, and sweeps the temporary files older than a day on
-  stores with no lifecycle rules (`:sweep`, one node of a cluster at a
-  time; `Storehouse.Cleaner.sweep/1` at once).
+  `Storehouse.delete_prefix_later/2` delete as jobs of the app's runner,
+  tried again until the store answers, and `Storehouse.Sweeper` deletes
+  the temporary files older than a day on stores with no lifecycle rules
+  (one node of a cluster at a time; `Storehouse.Sweeper.sweep/1` at
+  once).
 - `Storehouse.Memory`, a store in memory for tests: every callback, each
   test's files its own (`checkout/0`, `allow/2`, `$callers`) so async
   tests never share them, `fail_next/2` for error paths, and
@@ -82,9 +93,8 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   `analyzed/2` and kept in the column by `Storehouse.Ecto.File`. `Storehouse.analyze/3` runs steps at once, each once (or again
   with `force: true`), a failure kept with why; `store/2`'s `:analyze`
   runs them on the file just stored, from its path.
-  `Storehouse.analyze_later/3` runs them in `Storehouse.Tasks`, a
-  supervisor of the app's, or in Oban (`runner: :oban`,
-  `Storehouse.Oban.Analyze`), then calls the app's `:then`.
+  `Storehouse.analyze_later/3` runs them as a job of the app's runner,
+  then calls the app's `:then`.
   `Storehouse.Ecto.analyze_later/5`, and `insert/3` and `update/3` with
   `:analyze`, save the results in the record's column. A span per step,
   `[:storehouse, :analyze, ...]`. `Storehouse.Analyzer.Size`, a step that

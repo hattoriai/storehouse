@@ -93,8 +93,12 @@ It gives your app:
   takes only those bytes), or when it is verified, for two at once;
 * **cleanup**: files listed and deleted by prefix (an account's, a
   thousand at a time on S3), deletions tried again until the store
-  answers, and temporary files of forms never saved swept, by
-  `Storehouse.Cleaner`, a process of your app's, with no cron;
+  answers, and temporary files of forms never saved swept
+  (`Storehouse.Sweeper`), with no cron;
+* **work out of the request**, on a runner you choose: Oban's when your
+  app runs Oban, kept through deploys; a process of your app's without
+  it; or one of your own (another job system, a workflow engine), for
+  analysis, deletions and mirrors alike;
 * **files read back**: a file's size and type without reading it, its
   bytes all at once, as a stream a chunk at a time, or to a path, each
   refused past a size limit before a byte is read;

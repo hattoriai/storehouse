@@ -67,17 +67,9 @@ Storehouse.File.analysis(file, "pages")
 ## Later, and saved
 
 Most analysis should not hold up a request. `Storehouse.analyze_later/3`
-runs it in a process of the app's, then gives the file with its results to
-a function of yours, to save them:
-
-```elixir
-# lib/my_app/application.ex
-children = [
-  MyApp.Repo,
-  {Storehouse.Tasks, max_children: 4},
-  MyAppWeb.Endpoint
-]
-```
+runs it as a job of the app's runner (Oban's when the app runs Oban, see
+[Work out of the request](background.md)), then gives the file with its
+results to a function of yours, to save them:
 
 ```elixir
 Storehouse.analyze_later(file, [MyApp.Analyzers.Pages],
@@ -150,18 +142,12 @@ Storehouse.File.analyzed(file, :edit_metadata)
 #     "bytes" => 2_144, "checksum" => "q1…="}
 ```
 
-## With Oban
+## Kept through a deploy
 
-`Storehouse.Tasks` keeps its work in memory: a deploy in the middle of it
-loses it. With Oban in the app, `runner: :oban` runs the steps in a job
-(`Storehouse.Oban.Analyze`, on the `:storehouse` queue), retried when the
-store fails:
-
-```elixir
-config :my_app, Oban, queues: [default: 10, storehouse: 4]
-
-Storehouse.Ecto.analyze_later(Repo, user, :avatar, steps, runner: :oban)
-```
+The steps run in a job of the app's runner: with Oban, kept in the
+database and tried again when the store fails, so a deploy in the middle
+of them loses nothing. [Work out of the request](background.md) says how
+the runner is chosen, and how to give its queue.
 
 ## Telemetry
 

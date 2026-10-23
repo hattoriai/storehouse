@@ -48,3 +48,11 @@ defmodule StorehouseTest.Flaky do
   @impl true
   def list(prefix), do: Local.list(config(), prefix)
 end
+
+defmodule StorehouseTest.MirroredInOban do
+  @moduledoc "A mirror whose jobs are Oban's (StorehouseTest.Oban)."
+  use Storehouse.Mirror,
+    primary: StorehouseTest.PrivateFiles,
+    mirrors: [StorehouseTest.Flaky],
+    runner: {Storehouse.Runner.Oban, name: StorehouseTest.Oban}
+end

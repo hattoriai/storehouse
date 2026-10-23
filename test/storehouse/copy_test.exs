@@ -174,7 +174,7 @@ defmodule Storehouse.CopyTest do
 
   describe "Storehouse.Mirror" do
     setup do
-      start_supervised!({Storehouse.Cleaner, backoff: fn _attempt -> 20 end})
+      start_supervised!({Storehouse.Runner.Memory, backoff: fn _attempt -> 20 end})
       :ok
     end
 
@@ -215,8 +215,8 @@ defmodule Storehouse.CopyTest do
       eventually(fn -> Storehouse.head(cached.key, adapter: Flaky) == {:error, :enoent} end)
     end
 
-    test "without the cleaner, a mirror is written at once, and its error only logged" do
-      stop_supervised!(Storehouse.Cleaner)
+    test "without the runner's process, a mirror is written at once, its error only logged" do
+      stop_supervised!(Storehouse.Runner.Memory)
       Flaky.down()
 
       log =
