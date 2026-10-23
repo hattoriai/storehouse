@@ -38,7 +38,8 @@ It gives your app:
 
 * **files checked by their bytes**, not their names: PNG, JPEG, GIF and
   WebP images (with their width and height, a phone's photo turned as
-  its EXIF says), PDF, MP4 and WebM video, ZIP and Office documents, and
+  its EXIF says), the photos of cameras and phones (HEIC, HEIF, AVIF,
+  TIFF, and DNG as a download), PDF, MP4 and WebM video, ZIP and Office documents, and
   plain text. Anything else (HTML, SVG, JavaScript, a page renamed
   `.png`) is `application/octet-stream`, a download, or refused;
 * **safe keys**: `yyyy/mm/<uuid>-<safe name><extension>`, whose

@@ -89,13 +89,16 @@ defmodule Storehouse.CheckTest do
     assert %{content_type: "video/mp4"} = describe_bytes(dir, ftyp("isom", ["isom", "avc1"]), "")
     assert %{content_type: "video/mp4"} = describe_bytes(dir, ftyp("abcd", ["mp42"]), "")
 
+    # A phone's photo has an ftyp box too: an image, never a video.
+    assert %{content_type: "image/heic"} =
+             describe_bytes(dir, ftyp("heic", ["mif1"]), "video/mp4")
+
     matroska = :binary.replace(@webm, "webm", "mkvx")
 
     for {bytes, claim} <- [
           {matroska, "video/webm"},
           {ftyp("qt  ", ["qt  "]), "video/quicktime"},
           {ftyp("M4A ", ["isom"]), "video/mp4"},
-          {ftyp("heic", ["mif1"]), "video/mp4"},
           {ftyp("abcd", ["abcd"]), "video/mp4"},
           {<<0x1A, 0x45, 0xDF, 0xA3>>, "video/webm"},
           {<<0::32, "ftyp">>, "video/mp4"},
