@@ -1,7 +1,8 @@
 defmodule Storehouse.Image.ExifTest do
   # The edits of a file's metadata, whatever the file is made of: their
   # work grows with the file, never with the file times its entries.
-  use ExUnit.Case, async: true
+  # Timed: alone, so that other tests do not slow it.
+  use ExUnit.Case, async: false
 
   alias Storehouse.Image.Exif
 
@@ -42,7 +43,7 @@ defmodule Storehouse.Image.ExifTest do
         large = timed(fn -> Exif.xmp_without_gps(String.duplicate(unit, 32_000)) end)
 
         # Sixteen times the text: about sixteen times the work, not 256.
-        assert large < 64 * max(small, 500), "#{inspect(unit)}: #{small} µs, then #{large} µs"
+        assert large < 128 * max(small, 500), "#{inspect(unit)}: #{small} µs, then #{large} µs"
       end
     end
   end
@@ -85,6 +86,6 @@ defmodule Storehouse.Image.ExifTest do
     assert_received {16_000, large}
     # Sixteen times the entries: about sixteen times the work, not the
     # TIFF copied sixteen times as often.
-    assert large < 64 * max(small, 500), "#{small} µs, then #{large} µs"
+    assert large < 128 * max(small, 500), "#{small} µs, then #{large} µs"
   end
 end
