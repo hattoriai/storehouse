@@ -23,17 +23,13 @@ defmodule Storehouse.Mirror do
 
   ## A mirror that fails
 
-  A mirror's copy or deletion never fails the primary's: it is queued in
-  `Storehouse.Cleaner`, which tries it again until the mirror answers (a
-  second, then twice as long each time, up to five minutes, up to its
-  `:max_attempts`), with a warning in the log when it gives up. Start the
-  cleaner in the app's supervision tree; without it, the mirrors are
-  written at once, in the request, and an error is only logged.
-
-  The cleaner's queue lives in memory: copies not done when the app
+  A mirror's copy or deletion never fails the primary's: it is a job of
+  the app's runner (`Storehouse.Runner`), tried again until the mirror
+  answers. With Oban's (`Storehouse.Runner.Oban`), the jobs are kept in
+  the database and outlive a deploy; with `Storehouse.Runner.Memory`
+  they live in a process of the app's, and those not done when the app
   stops are not done. `Storehouse.copy_prefix/2` (or `mix storehouse.copy`)
-  copies what a mirror is missing, and only that, so running it after a
-  deploy, or on a schedule, catches it up.
+  copies what a mirror is missing, and only that, to catch it up.
 
   ## Moving to another store
 
@@ -46,21 +42,24 @@ defmodule Storehouse.Mirror do
 
     * `:primary` - the store files are written to and read from.
     * `:mirrors` - the stores given a copy of each.
+    * `:runner` - the runner of its jobs, in place of the app's
+      (`Storehouse.Runner`).
   """
 
   require Logger
 
-  alias Storehouse.Cleaner
+  alias Storehouse.Jobs
 
   defmacro __using__(opts) do
     primary = Keyword.fetch!(opts, :primary)
     mirrors = Keyword.fetch!(opts, :mirrors)
+    runner = Keyword.get(opts, :runner)
 
     quote do
       @behaviour Storehouse.Adapter
 
       @doc false
-      def __mirror__, do: {unquote(primary), unquote(mirrors)}
+      def __mirror__, do: {unquote(primary), unquote(mirrors), [runner: unquote(runner)]}
 
       @impl true
       def put(key, path, meta), do: Storehouse.Mirror.put(__mirror__(), key, path, meta)
@@ -110,14 +109,14 @@ defmodule Storehouse.Mirror do
   @doc false
   # What only the primary answers: reads, URLs, uploads straight to it. A
   # primary without the callback gives `{:error, :not_supported}`.
-  def read({primary, _mirrors}, function, args) do
+  def read({primary, _mirrors, _opts}, function, args) do
     if Code.ensure_loaded?(primary) and function_exported?(primary, function, length(args)),
       do: apply(primary, function, args),
       else: {:error, :not_supported}
   end
 
   @doc false
-  def put({primary, _mirrors} = mirror, key, path, meta) do
+  def put({primary, _mirrors, _opts} = mirror, key, path, meta) do
     with {:ok, url} <- primary.put(key, path, meta) do
       mirrored(mirror, key)
       {:ok, url}
@@ -131,7 +130,7 @@ defmodule Storehouse.Mirror do
   end
 
   @doc false
-  def copy({primary, _mirrors} = mirror, from, to) do
+  def copy({primary, _mirrors, _opts} = mirror, from, to) do
     with :ok <- primary.copy(from, to) do
       mirrored(mirror, to)
       :ok
@@ -139,22 +138,25 @@ defmodule Storehouse.Mirror do
   end
 
   @doc false
-  def delete({primary, mirrors}, key) do
+  def delete({primary, mirrors, opts}, key) do
     with :ok <- primary.delete(key) do
-      for store <- mirrors, do: later({:key, key}, store)
+      for store <- mirrors, do: later(Jobs.Delete.job(%{"key" => key}, store), store, opts)
       :ok
     end
   end
 
   @doc false
-  def delete_many({primary, mirrors}, keys) do
+  def delete_many({primary, mirrors, opts}, keys) do
     result =
       if function_exported?(primary, :delete_many, 1),
         do: primary.delete_many(keys),
         else: Enum.reduce_while(keys, :ok, &deleted(primary, &1, &2))
 
     with :ok <- result do
-      for store <- mirrors, key <- keys, do: later({:key, key}, store)
+      for store <- mirrors,
+          key <- keys,
+          do: later(Jobs.Delete.job(%{"key" => key}, store), store, opts)
+
       :ok
     end
   end
@@ -167,7 +169,7 @@ defmodule Storehouse.Mirror do
   end
 
   @doc false
-  def stream_open({primary, _mirrors} = mirror, key, meta) do
+  def stream_open({primary, _mirrors, _opts} = mirror, key, meta) do
     with {:ok, stream} <- read(mirror, :stream_open, [key, meta]),
          do: {:ok, %{mirror: mirror, key: key, primary: primary, stream: stream}}
   end
@@ -190,8 +192,8 @@ defmodule Storehouse.Mirror do
   def stream_abort(%{primary: primary, stream: stream}), do: primary.stream_abort(stream)
 
   # Each mirror, given a copy of the primary's file.
-  defp mirrored({primary, mirrors}, key) do
-    for store <- mirrors, do: later({:mirror, {key, primary, store}}, store)
+  defp mirrored({primary, mirrors, opts}, key) do
+    for store <- mirrors, do: later(Jobs.Mirror.job(key, primary, store), store, opts)
   end
 
   @doc false
@@ -213,10 +215,11 @@ defmodule Storehouse.Mirror do
     end
   end
 
-  # In the cleaner, tried again until the mirror answers; at once without
-  # it, an error only logged: a mirror never fails the primary.
-  defp later(target, store) do
-    case Cleaner.queue(target, adapter: store) do
+  # A job of the runner, tried again until the mirror answers; a runner
+  # that cannot keep it, or runs it at once and it fails, only logged: a
+  # mirror never fails the primary.
+  defp later(job, store, opts) do
+    case Storehouse.Runner.enqueue(job, opts) do
       :ok ->
         :ok
 

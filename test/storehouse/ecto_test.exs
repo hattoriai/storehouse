@@ -314,8 +314,7 @@ defmodule Storehouse.EctoTest do
 
       assert :ok =
                Storehouse.Ecto.analyze_later(Repo, user, :avatar, [Analyzers.Bytes],
-                 runner: :oban,
-                 oban: [name: StorehouseTest.Oban]
+                 runner: {Storehouse.Runner.Oban, name: StorehouseTest.Oban}
                )
 
       assert Storehouse.File.analyzed(Repo.get!(User, user.id).avatar, "bytes") == %{

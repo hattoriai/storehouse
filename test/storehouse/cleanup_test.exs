@@ -137,8 +137,8 @@ defmodule Storehouse.CleanupTest do
       assert Storehouse.delete_prefix_later("/") == {:error, :invalid_prefix}
     end
 
-    test "with a cleaner, retries until the store answers", %{root: root} do
-      start_supervised!({Storehouse.Cleaner, backoff: fn _attempt -> 10 end})
+    test "in the memory runner, retries until the store answers", %{root: root} do
+      start_supervised!({Storehouse.Runner.Memory, backoff: fn _attempt -> 10 end})
       key = write(root, "2026/10/a.png")
       Flaky.fail(2)
 
@@ -149,25 +149,29 @@ defmodule Storehouse.CleanupTest do
       refute File.exists?(Path.join(root, key))
     end
 
-    test "with a cleaner, gives up after :max_attempts", %{root: root} do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:storehouse, :cleaner, :discarded]])
-      start_supervised!({Storehouse.Cleaner, max_attempts: 3, backoff: fn _attempt -> 10 end})
+    test "in the memory runner, gives up after :max_attempts", %{root: root} do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:storehouse, :job, :discarded]])
+
+      start_supervised!(
+        {Storehouse.Runner.Memory, max_attempts: 3, backoff: fn _attempt -> 10 end}
+      )
+
       key = write(root, "2026/10/a.png")
       Flaky.fail(100)
 
       ExUnit.CaptureLog.capture_log(fn ->
         :ok = Storehouse.delete_later(key, adapter: Flaky)
 
-        assert_receive {[:storehouse, :cleaner, :discarded], ^ref, %{attempts: 3},
-                        %{target: {:key, ^key}, reason: :unavailable}},
+        assert_receive {[:storehouse, :job, :discarded], ^ref, %{attempts: 3},
+                        %{job: %Storehouse.Job{args: %{"key" => ^key}}, reason: :unavailable}},
                        1_000
       end)
 
       assert File.exists?(Path.join(root, key))
     end
 
-    test "with a cleaner, deletes a prefix", %{root: root} do
-      start_supervised!(Storehouse.Cleaner)
+    test "in the memory runner, deletes a prefix", %{root: root} do
+      start_supervised!(Storehouse.Runner.Memory)
       for n <- 1..3, do: write(root, "accounts/7/#{n}.png")
 
       assert Storehouse.delete_prefix_later("accounts/7/") == :ok
@@ -187,15 +191,15 @@ defmodule Storehouse.CleanupTest do
     end
 
     test "sweep/1 deletes the temporary files older than :max_age", ctx do
-      assert Storehouse.Cleaner.sweep(max_age: 86_400) == {:ok, 1}
+      assert Storehouse.Sweeper.sweep(max_age: 86_400) == {:ok, 1}
 
       refute File.exists?(Path.join(ctx.root, ctx.old))
       assert File.exists?(Path.join(ctx.root, ctx.new))
       assert File.exists?(Path.join(ctx.root, ctx.kept))
     end
 
-    test "the cleaner sweeps on its own", ctx do
-      start_supervised!({Storehouse.Cleaner, sweep: [max_age: 86_400, every: 3_600]})
+    test "the sweeper sweeps on its own", ctx do
+      start_supervised!({Storehouse.Sweeper, max_age: 86_400, every: 3_600})
 
       wait_until(fn -> not File.exists?(Path.join(ctx.root, ctx.old)) end)
       assert File.exists?(Path.join(ctx.root, ctx.new))

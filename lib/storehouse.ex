@@ -66,11 +66,7 @@ defmodule Storehouse do
 
   require Logger
 
-  alias Storehouse.Check
-  alias Storehouse.Oban.Analyze, as: AnalyzeJob
-
-  # Oban is optional: these are called only with runner: :oban.
-  @compile {:no_warn_undefined, [Oban, AnalyzeJob]}
+  alias Storehouse.{Check, Jobs}
 
   @max_name 100
   @max_display_name 200
@@ -874,18 +870,15 @@ defmodule Storehouse do
       )
 
   `:then` is `{module, function, args}`, called with the file first, then
-  `args`. A file that cannot be read for the steps gives it nothing: with
-  Oban, the job is tried again.
+  `args`. The work is a job of the app's runner (`Storehouse.Runner`):
+  Oban's when the app runs Oban, else a process of the app's. A file that
+  cannot be read for the steps gives the function nothing, and the job is
+  tried again.
 
   ## Options
 
     * `:then` - the function (required).
-    * `:runner` - `:task` (the default) runs them in `Storehouse.Tasks`, a
-      supervisor of the app's, or at once without it; `:oban` in an Oban
-      job (`Storehouse.Oban.Analyze`), which outlives a deploy.
-    * `:oban` - for `runner: :oban`, the job's options (`:queue`,
-      `:max_attempts`, …) and `:name`, the Oban instance (the default is
-      `Oban`).
+    * `:runner` - the runner, in place of the app's (`Storehouse.Runner`).
     * `:force`, `:max_bytes` and `:adapter` - as for `analyze/3`.
   """
   @spec analyze_later(Storehouse.File.t(), [Storehouse.Analyzer.step()], keyword()) ::
@@ -898,24 +891,9 @@ defmodule Storehouse do
     later =
       opts |> Keyword.take([:then, :force, :max_bytes, :notify]) |> Keyword.put(:adapter, adapter)
 
-    case Keyword.get(opts, :runner, :task) do
-      :task -> Storehouse.Tasks.run(fn -> analyze_now(file, steps, later) end)
-      :oban -> analyze_in_oban(file, steps, later, Keyword.get(opts, :oban, []))
-    end
-  end
-
-  defp analyze_in_oban(file, steps, later, oban) do
-    {name, job} = Keyword.pop(oban, :name, Oban)
-    term = Base.encode64(:erlang.term_to_binary({file, steps, later}))
-    names = Enum.map(steps, &Storehouse.Analyzer.name/1)
-
-    case Oban.insert(
-           name,
-           AnalyzeJob.new(%{key: file.key, steps: names, term: term}, job)
-         ) do
-      {:ok, _job} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
+    file
+    |> Jobs.Analyze.job(steps, later)
+    |> Storehouse.Runner.enqueue(opts)
   end
 
   @doc false
@@ -1277,19 +1255,24 @@ defmodule Storehouse do
 
   @doc """
   Deletes the file with `key` later, and again until the store answers:
-  a file replaced or removed, whose record is already saved. With
-  `Storehouse.Cleaner` in the app's supervision tree, the deletion is
-  queued there and retried when the store fails; without it, the file is
-  deleted at once, as `delete/2` does.
+  a file replaced or removed, whose record is already saved. The deletion
+  is a job of the app's runner (`Storehouse.Runner`), tried again when the
+  store fails.
 
-  Gives `:ok`, or `{:error, :invalid_key}` for a key `valid_key?/1`
-  refuses. Takes `:adapter`, as `delete/2` does.
+  Gives `:ok` once the job is kept, or `{:error, :invalid_key}` for a key
+  `valid_key?/1` refuses. Takes `:adapter`, as `delete/2` does, and
+  `:runner`.
   """
   @spec delete_later(Storehouse.Adapter.key(), keyword()) :: :ok | {:error, term()}
   def delete_later(key, opts \\ []) when is_binary(key) do
     if valid_key?(key),
-      do: Storehouse.Cleaner.queue({:key, key}, opts),
+      do: later_delete(%{"key" => key}, opts),
       else: {:error, :invalid_key}
+  end
+
+  defp later_delete(target, opts) do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+    target |> Jobs.Delete.job(adapter) |> Storehouse.Runner.enqueue(opts)
   end
 
   @doc """
@@ -1300,7 +1283,7 @@ defmodule Storehouse do
   @spec delete_prefix_later(String.t(), keyword()) :: :ok | {:error, term()}
   def delete_prefix_later(prefix, opts \\ []) when is_binary(prefix) do
     if valid_prefix?(prefix),
-      do: Storehouse.Cleaner.queue({:prefix, prefix}, opts),
+      do: later_delete(%{"prefix" => prefix}, opts),
       else: {:error, :invalid_prefix}
   end
 

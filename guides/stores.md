@@ -143,7 +143,8 @@ defmodule MyApp.Media do
 end
 ```
 
-1. Use `MyApp.Media` as the store, with `Storehouse.Cleaner` started.
+1. Use `MyApp.Media` as the store. Its copies are jobs of the app's
+   runner ([Work out of the request](background.md)).
 2. Copy what there was: `mix storehouse.copy --from MyApp.OldMedia --to MyApp.NewMedia`.
 3. Swap them, `primary: MyApp.NewMedia, mirrors: [MyApp.OldMedia]`, so
    the app reads the new one; then use `MyApp.NewMedia` alone.
@@ -466,21 +467,8 @@ give the tools a time limit.
 
 Storehouse does not know which of your records use a file. When one goes,
 delete its file with `Storehouse.delete/2`, or with
-`Storehouse.delete_later/2`, which tries again until the store answers
-when `Storehouse.Cleaner` runs:
-
-```elixir
-# lib/my_app/application.ex
-children = [
-  MyApp.Repo,
-  {Storehouse.Cleaner, sweep: [max_age: 86_400]},
-  MyAppWeb.Endpoint
-]
-```
-
-The cleaner keeps its queue in memory: a deletion not done when the app
-stops is not done. For deletions that must outlive a deploy, call
-`Storehouse.delete/2` from an Oban job.
+`Storehouse.delete_later/2`, a job of the app's runner, tried again until
+the store answers ([Work out of the request](background.md)).
 
 ### Many files at once
 
@@ -503,7 +491,17 @@ An empty prefix, or `"/"`, is refused: nothing deletes a whole store.
 
 A bucket's lifecycle rule deletes the files under the temporary prefix
 (see the Ecto guide). The local disk, and a store with no lifecycle
-rules, has the cleaner's `:sweep`: every hour, on one node of a cluster,
+rules, has `Storehouse.Sweeper`: every hour, on one node of a cluster,
 it deletes the temporary files older than `:max_age` seconds.
-`Storehouse.Cleaner.sweep/1` does the same at once, from a task or a job
+
+```elixir
+# lib/my_app/application.ex
+children = [
+  MyApp.Repo,
+  {Storehouse.Sweeper, max_age: 86_400},
+  MyAppWeb.Endpoint
+]
+```
+
+`Storehouse.Sweeper.sweep/1` does the same at once, from a scheduled job
 of yours.

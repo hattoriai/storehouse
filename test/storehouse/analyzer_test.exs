@@ -104,7 +104,7 @@ defmodule Storehouse.AnalyzerTest do
   end
 
   describe "analyze_later/3" do
-    test "without Storehouse.Tasks, runs at once, then the app's function", %{stored: file} do
+    test "without a runner's process, runs at once, then the app's function", %{stored: file} do
       assert :ok =
                Storehouse.analyze_later(file, [NoFile],
                  adapter: Memory,
@@ -115,8 +115,8 @@ defmodule Storehouse.AnalyzerTest do
       assert Storehouse.File.analyzed(analyzed, "no_file") == %{"ran" => true}
     end
 
-    test "with Storehouse.Tasks, in a task that sees the test's files", %{stored: file} do
-      start_supervised!({Storehouse.Tasks, max_children: 2})
+    test "in Storehouse.Runner.Memory, in a task that sees the test's files", %{stored: file} do
+      start_supervised!({Storehouse.Runner.Memory, max_concurrency: 2})
 
       assert :ok =
                Storehouse.analyze_later(file, [Bytes],
@@ -131,10 +131,11 @@ defmodule Storehouse.AnalyzerTest do
     test "a file that cannot be read gives the app's function nothing", %{stored: file} do
       :ok = Storehouse.delete(file.key, adapter: Memory)
 
+      # Run at once, with no runner's process: its error, for the caller.
       assert Storehouse.analyze_later(file, [Bytes],
                adapter: Memory,
                then: {StorehouseTest.Analyzers, :done, [self()]}
-             ) == :ok
+             ) == {:error, :enoent}
 
       refute_received {:analyzed, _file}
     end

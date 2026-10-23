@@ -52,7 +52,7 @@ defmodule Storehouse.MixProject do
       {:ecto, "~> 3.12", optional: true},
       # Storehouse.File as JSON with Jason, beside Elixir's own JSON. Optional.
       {:jason, "~> 1.4", optional: true},
-      # Storehouse.analyze_later/3 with runner: :oban. Optional.
+      # Storehouse.Runner.Oban, the runner of Storehouse's jobs in Oban. Optional.
       {:oban, "~> 2.19", optional: true},
       {:ecto_sql, "~> 3.12", optional: true},
       {:postgrex, "~> 0.19", only: :test},
@@ -101,6 +101,7 @@ defmodule Storehouse.MixProject do
         "guides/private_files.md",
         "guides/ecto.md",
         "guides/analysis.md",
+        "guides/background.md",
         "CHANGELOG.md"
       ],
       groups_for_modules: [
@@ -121,11 +122,16 @@ defmodule Storehouse.MixProject do
           Storehouse.MetadataEditor.Builtin,
           Storehouse.JPEG,
           Storehouse.PNG,
-          Storehouse.WebP,
-          Storehouse.Tasks,
-          Storehouse.Oban.Analyze
+          Storehouse.WebP
         ],
-        Cleanup: [Storehouse.Cleaner],
+        "Work out of the request": [
+          Storehouse.Runner,
+          Storehouse.Job,
+          Storehouse.Runner.Oban,
+          Storehouse.Runner.Oban.Worker,
+          Storehouse.Runner.Memory
+        ],
+        Cleanup: [Storehouse.Sweeper],
         Events: [Storehouse.Notify, Storehouse.Notify.PubSub],
         Tests: [Storehouse.Memory, Storehouse.Test],
         "Private files": [Storehouse.Redirect],
