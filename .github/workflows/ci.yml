@@ -50,6 +50,8 @@ jobs:
       - run: mix compile --warnings-as-errors
       - run: mix format --check-formatted
       - run: mix credo --strict
+      # The JavaScript upload client (priv/static/storehouse-client.mjs).
+      - run: node --test test/js/*.test.mjs
       - run: mix test
         env:
           S3_ENDPOINT: http://127.0.0.1:4566

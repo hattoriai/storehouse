@@ -160,9 +160,12 @@ if Code.ensure_loaded?(Ecto.Changeset) do
     # back.
     defp promote_field(changeset, field, opts) do
       case fetch_change(changeset, field) do
-        {:ok, value} -> promote_value(changeset, field, value, Keyword.take(opts, [:adapter]))
+        {:ok, value} ->
+          promote_value(changeset, field, value, store_opts(changeset.data, field, opts))
+
         # The record has the file already: nothing to make permanent.
-        :error -> changeset
+        :error ->
+          changeset
       end
     end
 
@@ -185,16 +188,16 @@ if Code.ensure_loaded?(Ecto.Changeset) do
     @doc """
     The files a saved changeset leaves behind: those its record had in a
     field of files, and does not have after it. Delete them once the
-    transaction has committed (`delete_files/2`).
+    transaction has committed (`delete_files/2`, with the field's store as
+    `:adapter` when it has one, `store/2`).
     """
     @spec replaced(Ecto.Changeset.t(), struct()) :: [Storehouse.File.t()]
-    def replaced(%Ecto.Changeset{data: before}, %_{} = saved) do
-      for field <- file_fields(saved),
-          old = List.wrap(Map.get(before, field)),
-          kept = MapSet.new(List.wrap(Map.get(saved, field)), & &1.key),
-          file <- old,
-          not MapSet.member?(kept, file.key),
-          do: file
+    def replaced(%Ecto.Changeset{} = changeset, %_{} = saved),
+      do: Enum.flat_map(file_fields(saved), &replaced_in(changeset, saved, &1))
+
+    defp replaced_in(%Ecto.Changeset{data: before}, saved, field) do
+      kept = MapSet.new(List.wrap(Map.get(saved, field)), & &1.key)
+      for file <- List.wrap(Map.get(before, field)), not MapSet.member?(kept, file.key), do: file
     end
 
     @doc "Every file of a record, in its fields of files."
@@ -210,6 +213,44 @@ if Code.ensure_loaded?(Ecto.Changeset) do
     @spec delete_files([Storehouse.File.t()], keyword()) :: :ok
     def delete_files(files, opts \\ []) do
       Enum.each(files, &Storehouse.delete_later(&1.key, Keyword.take(opts, [:adapter])))
+    end
+
+    # The files of each field deleted from the field's store.
+    defp delete_by_field(record, files_of, opts) do
+      for field <- file_fields(record),
+          do: delete_files(files_of.(field), store_opts(record, field, opts))
+
+      :ok
+    end
+
+    @doc """
+    The store of a schema's field of files (its `store:`,
+    `Storehouse.Ecto.File`), or `nil` for the default store.
+
+        Storehouse.Ecto.store(Invoice, :pdf)
+        #=> MyApp.PrivateFiles
+    """
+    @spec store(module(), atom()) :: module() | nil
+    def store(schema, field) do
+      case schema.__schema__(:type, field) do
+        {:parameterized, {Storehouse.Ecto.File, params}} ->
+          Storehouse.Ecto.File.store(params)
+
+        {:array, {:parameterized, {Storehouse.Ecto.File, params}}} ->
+          Storehouse.Ecto.File.store(params)
+
+        _other ->
+          nil
+      end
+    end
+
+    # The store a field's files go to: the call's `:adapter`, the field's
+    # `store:`, or the default.
+    defp store_opts(%schema{}, field, opts) do
+      case Keyword.get_lazy(opts, :adapter, fn -> store(schema, field) end) do
+        nil -> []
+        adapter -> [adapter: adapter]
+      end
     end
 
     @doc """
@@ -239,7 +280,7 @@ if Code.ensure_loaded?(Ecto.Changeset) do
 
       with {:ok, saved} <- repo.update(changeset, opts) do
         unless repo.in_transaction?() do
-          delete_files(replaced(changeset, saved), opts)
+          delete_by_field(saved, &replaced_in(changeset, saved, &1), opts)
           analyze_new(repo, changeset.data, saved, analyze, opts)
         end
 
@@ -284,7 +325,11 @@ if Code.ensure_loaded?(Ecto.Changeset) do
     defp analyze_files(repo, %schema{} = record, field, files, steps, opts) do
       [primary] = schema.__schema__(:primary_key)
       id = Map.fetch!(record, primary)
-      later = Keyword.take(opts, [:runner, :oban, :force, :max_bytes, :adapter])
+
+      later =
+        opts
+        |> Keyword.take([:runner, :oban, :force, :max_bytes])
+        |> Keyword.merge(store_opts(record, field, opts))
 
       for file <- files,
           do:
@@ -338,7 +383,9 @@ if Code.ensure_loaded?(Ecto.Changeset) do
       record = with %Ecto.Changeset{data: data} <- record_or_changeset, do: data
 
       with {:ok, deleted} <- repo.delete(record_or_changeset, opts) do
-        unless repo.in_transaction?(), do: delete_files(files(record), opts)
+        unless repo.in_transaction?(),
+          do: delete_by_field(record, &List.wrap(Map.get(record, &1)), opts)
+
         {:ok, deleted}
       end
     end
@@ -346,11 +393,13 @@ if Code.ensure_loaded?(Ecto.Changeset) do
     # The fields of a schema whose type is Storehouse.Ecto.File, or a list of them.
     defp file_fields(%schema{}) do
       for field <- schema.__schema__(:fields),
-          schema.__schema__(:type, field) in [
-            Storehouse.Ecto.File,
-            {:array, Storehouse.Ecto.File}
-          ],
+          file_type?(schema.__schema__(:type, field)),
           do: field
     end
+
+    defp file_type?({:array, type}), do: file_type?(type)
+    defp file_type?({:parameterized, {Storehouse.Ecto.File, _params}}), do: true
+    defp file_type?(Storehouse.Ecto.File), do: true
+    defp file_type?(_type), do: false
   end
 end

@@ -68,6 +68,47 @@ A file's `url` is its public URL: of a public bucket, or of `public_url`.
 A private bucket serves its files at signed URLs (see
 [Private files](private_files.md)).
 
+## Several stores
+
+An app often keeps files in more than one place: a public bucket behind a
+CDN for avatars and a private one for invoices, large media on R2, an EU
+customer's files in an EU bucket. Each is a module of the app's, with a
+config of its own:
+
+```elixir
+defmodule MyApp.PrivateFiles, do: use Storehouse.S3
+defmodule MyApp.Media, do: use Storehouse.S3
+defmodule MyApp.Scratch, do: use Storehouse.Local
+
+# config/runtime.exs
+config :storehouse, MyApp.PrivateFiles, bucket: "acme-private", region: "eu-west-1", ...
+config :storehouse, MyApp.Media, bucket: "acme-media", endpoint: "https://….r2.cloudflarestorage.com", ...
+config :storehouse, MyApp.Scratch, root: "/var/lib/my_app/scratch", url_prefix: "/scratch", secret: ...
+```
+
+Give a store as `adapter:` to any call (`store/2`, `presign_upload/4`,
+`verify_upload/2`, `signed_url/2`, `read/2`, `delete/2`, …,
+`Storehouse.Live.allow/3`, `Storehouse.Redirect`), or to an Ecto field,
+whose files are then made permanent, deleted and analyzed there:
+
+```elixir
+field :invoice, Storehouse.Ecto.File, store: MyApp.PrivateFiles
+```
+
+A second local store is served by a plug of its own:
+
+```elixir
+plug Storehouse.Local.Plug, store: MyApp.Scratch
+```
+
+`Storehouse.S3` and `Storehouse.Local` themselves stay the default store,
+read from `config :storehouse, Storehouse.S3` (or `Storehouse.Local`), as
+before. With `use Storehouse.S3, otp_app: :my_app`, a store's config is
+`config :my_app, MyApp.PrivateFiles, …`.
+
+A `Storehouse.File` does not record its store: the field (or the call)
+names it.
+
 ## In development
 
 Two ways, as you like it.

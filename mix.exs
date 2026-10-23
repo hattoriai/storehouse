@@ -81,7 +81,7 @@ defmodule Storehouse.MixProject do
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
       files:
-        ~w(lib priv/static/storehouse.js priv/static/storehouse.cjs.js package.json mix.exs .formatter.exs guides README.md CHANGELOG.md LICENSE NOTICE)
+        ~w(lib priv/static/storehouse.js priv/static/storehouse.cjs.js priv/static/storehouse-client.mjs priv/static/storehouse-client.d.mts package.json mix.exs .formatter.exs guides README.md CHANGELOG.md LICENSE NOTICE)
     ]
   end
 

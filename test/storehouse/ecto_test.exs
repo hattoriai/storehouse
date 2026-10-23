@@ -337,4 +337,56 @@ defmodule Storehouse.EctoTest do
 
     assert changeset(%User{}, %{name: "Ana"}, mine, owner: "accounts/42").valid?
   end
+
+  describe "a field with a store of its own" do
+    setup do
+      root =
+        Path.join(
+          System.tmp_dir!(),
+          "storehouse-ecto-private-#{System.unique_integer([:positive])}"
+        )
+
+      Application.put_env(:storehouse, StorehouseTest.PrivateFiles,
+        root: root,
+        url_prefix: "/private"
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:storehouse, StorehouseTest.PrivateFiles)
+        File.rm_rf!(root)
+      end)
+
+      %{private: root}
+    end
+
+    test "its files are made permanent there, and deleted from there", %{
+      root: root,
+      private: private
+    } do
+      assert Storehouse.Ecto.store(User, :invoice) == StorehouseTest.PrivateFiles
+      assert Storehouse.Ecto.store(User, :avatar) == nil
+
+      {:ok, cached} =
+        Storehouse.store(Path.join(@fixtures, "small.png"),
+          adapter: StorehouseTest.PrivateFiles,
+          cache: true
+        )
+
+      {:ok, user} =
+        %User{}
+        |> change(name: "Ana")
+        |> Storehouse.Ecto.put_file(:invoice, cached)
+        |> Storehouse.Ecto.put_file(:avatar, upload("small.gif"))
+        |> then(&Storehouse.Ecto.insert(Repo, &1))
+
+      refute Storehouse.cached?(user.invoice)
+      assert File.exists?(Path.join(private, user.invoice.key))
+      refute File.exists?(Path.join(root, user.invoice.key))
+      assert there?(root, user.avatar)
+
+      {:ok, _deleted} = Storehouse.Ecto.delete(Repo, user)
+      refute File.exists?(Path.join(private, user.invoice.key))
+      refute there?(root, user.avatar)
+    end
+  end
 end
