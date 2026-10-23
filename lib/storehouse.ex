@@ -115,6 +115,11 @@ defmodule Storehouse do
     * `:room` - how many bytes the owner may still store: a larger file
       gives `{:error, :storage_full}`, and is not stored. The default is
       no limit.
+    * `:existing` - a function of a checksum (`checksum/1`'s, Base64)
+      that gives the file the app has already with it, or `nil`: the same
+      file stored again is then that file, `{:existing, file}`, and nothing
+      is stored. With `:owner`, a file of another owner is never given
+      back. See "The same file again" in the Stores guide.
     * `:analyze` - analysis steps (`Storehouse.Analyzer`) to run once the
       file is stored, from `path`, with no download: the file comes with
       their results. A step that fails keeps why, and the file is stored
@@ -131,7 +136,8 @@ defmodule Storehouse do
       app renders and stores the image. A result that is not a safe URL,
       or an exception, gives none and logs a warning.
   """
-  @spec store(Path.t(), keyword()) :: {:ok, Storehouse.File.t()} | {:error, term()}
+  @spec store(Path.t(), keyword()) ::
+          {:ok, Storehouse.File.t()} | {:existing, Storehouse.File.t()} | {:error, term()}
   def store(path, opts \\ []) when is_binary(path) do
     name = clean_name(Keyword.get_lazy(opts, :name, fn -> Path.basename(path) end))
     adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
@@ -153,8 +159,9 @@ defmodule Storehouse do
          {:ok, description} <- Check.describe(path, claim, opts),
          :ok <- fits(description.bytes, opts[:room]),
          :ok <- accepted(description.content_type, Keyword.get(opts, :accept)),
-         {:ok, key} <- new_key(opts, name, description.content_type),
          checksum = checksum(path),
+         :new <- known(opts, checksum),
+         {:ok, key} <- new_key(opts, name, description.content_type),
          meta = %{
            name: name,
            content_type: description.content_type,
@@ -305,6 +312,50 @@ defmodule Storehouse do
     error in Storehouse.ReadError -> {:error, error.reason}
   end
 
+  # The file the app has already with this checksum: `{:existing, file}`,
+  # never another owner's, or `:new`.
+  defp known(opts, checksum) do
+    with fun when is_function(fun, 1) <- opts[:existing],
+         true <- is_binary(checksum),
+         %Storehouse.File{} = file <- fun.(checksum),
+         true <- is_nil(opts[:owner]) or owns?(opts[:owner], file.key) do
+      {:existing, file}
+    else
+      _new -> :new
+    end
+  end
+
+  @doc """
+  A SHA-256 as `checksum/1` gives it (Base64), from hex or Base64, as a
+  browser may send it: `{:ok, checksum}`, `{:ok, nil}` for none, or
+  `{:error, :invalid_checksum}`.
+
+  ## Examples
+
+      iex> Storehouse.claimed_checksum("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+      {:ok, "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="}
+
+      iex> Storehouse.claimed_checksum("not one")
+      {:error, :invalid_checksum}
+
+  """
+  @spec claimed_checksum(String.t() | nil) ::
+          {:ok, String.t() | nil} | {:error, :invalid_checksum}
+  def claimed_checksum(nil), do: {:ok, nil}
+
+  def claimed_checksum(checksum) when is_binary(checksum) do
+    hex = with 64 <- byte_size(checksum), do: Base.decode16(checksum, case: :mixed)
+    base64 = with 44 <- byte_size(checksum), do: Base.decode64(checksum)
+
+    case {hex, base64} do
+      {{:ok, <<_::256>> = digest}, _base64} -> {:ok, Base.encode64(digest)}
+      {_hex, {:ok, <<_::256>>}} -> {:ok, checksum}
+      _neither -> {:error, :invalid_checksum}
+    end
+  end
+
+  def claimed_checksum(_checksum), do: {:error, :invalid_checksum}
+
   # A file of `bytes` in the room left: `:storage_full` when it does not fit.
   defp fits(_bytes, nil), do: :ok
   defp fits(_bytes, :infinity), do: :ok
@@ -444,6 +495,11 @@ defmodule Storehouse do
     * `:owner` and `:room`, as for `store/2`: the key under the owner's
       prefix, and a file larger than the room left refused at once, with
       `{:error, :storage_full}`.
+    * `:checksum` - the file's SHA-256, as the browser read it (hex, or
+      Base64): the upload is signed with it, so the store takes only
+      those bytes. An invalid one gives `{:error, :invalid_checksum}`.
+    * `:existing` - as for `store/2`, with `:checksum`: a file the app
+      has already gives `{:existing, file}`, and nothing is uploaded.
     * `:adapter` and `:key`, as for `store/2`. The adapter must sign
       uploads (`c:Storehouse.Adapter.presign_upload/3`): `Storehouse.Local`
       and `Storehouse.S3` do; another gives `{:error, :not_supported}`.
@@ -451,6 +507,7 @@ defmodule Storehouse do
   @spec presign_upload(String.t(), String.t() | nil, non_neg_integer(), keyword()) ::
           {:ok,
            %{key: Storehouse.Adapter.key(), method: String.t(), url: String.t(), headers: map()}}
+          | {:existing, Storehouse.File.t()}
           | {:error, term()}
   def presign_upload(name, claim, bytes, opts \\ []) when is_integer(bytes) and bytes >= 0 do
     adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
@@ -463,6 +520,8 @@ defmodule Storehouse do
   defp do_presign_upload(name, type, bytes, adapter, opts) do
     with :ok <- supported(adapter, :presign_upload, 3),
          :ok <- accepted(type, Keyword.get(opts, :accept)),
+         {:ok, checksum} <- claimed_checksum(opts[:checksum]),
+         :new <- known(opts, checksum),
          :ok <- fits(bytes, opts[:room]),
          :ok <-
            if(is_integer(opts[:max_bytes]) and bytes > opts[:max_bytes],
@@ -470,10 +529,9 @@ defmodule Storehouse do
              else: :ok
            ),
          {:ok, key} <- new_key(opts, name, type),
+         meta = %{name: name, content_type: type, bytes: bytes, checksum: checksum},
          {:ok, upload} <-
-           adapter.presign_upload(key, %{name: name, content_type: type, bytes: bytes},
-             expires_in: Keyword.get(opts, :expires_in, 600)
-           ) do
+           adapter.presign_upload(key, meta, expires_in: Keyword.get(opts, :expires_in, 600)) do
       {:ok, Map.put(upload, :key, key)}
     end
   end
@@ -495,13 +553,16 @@ defmodule Storehouse do
     * `:room` - the bytes the owner may still store, against the size the
       store gives (not the one the browser declared): a larger file gives
       `{:error, :storage_full}`, and is deleted.
+    * `:existing` - as for `store/2`, with the checksum the store keeps: a
+      file the app has already (the same file uploaded twice at once)
+      gives `{:existing, file}`, and the copy just uploaded is deleted.
     * `:accept`, `:max_bytes`, `:max_pixels`, `:adapter`, as for
       `store/2`.
     * `:preview` - as for `store/2`, with `nil` for the path: the file is
       not here.
   """
   @spec verify_upload(Storehouse.Adapter.key(), keyword()) ::
-          {:ok, Storehouse.File.t()} | {:error, term()}
+          {:ok, Storehouse.File.t()} | {:existing, Storehouse.File.t()} | {:error, term()}
   def verify_upload(key, opts \\ []) do
     adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
 
@@ -539,7 +600,10 @@ defmodule Storehouse do
         metadata: metadata
       }
 
-      {:ok, preview(file, nil, Keyword.get(opts, :preview))}
+      case known(opts, file.checksum) do
+        {:existing, %{key: other}} = existing when other != key -> discard(adapter, key, existing)
+        _new_or_itself -> {:ok, preview(file, nil, Keyword.get(opts, :preview))}
+      end
     end
   end
 
@@ -1216,6 +1280,7 @@ defmodule Storehouse do
   end
 
   defp outcome({:ok, %Storehouse.File{} = file}), do: %{result: :ok, file: file}
+  defp outcome({:existing, %Storehouse.File{} = file}), do: %{result: :existing, file: file}
   defp outcome({:ok, %{key: key}}), do: %{result: :ok, key: key}
   defp outcome({:ok, _other}), do: %{result: :ok}
   defp outcome(:ok), do: %{result: :ok}

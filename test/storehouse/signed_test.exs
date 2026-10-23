@@ -34,6 +34,25 @@ defmodule Storehouse.SignedTest do
   end
 
   describe "an upload straight to the local store" do
+    test "signed with its checksum takes only those bytes", %{root: root, public: opts} do
+      data = File.read!(Path.join(@fixtures, "harbour.jpg"))
+      checksum = Base.encode64(:crypto.hash(:sha256, data))
+
+      {:ok, upload} =
+        Storehouse.presign_upload("Quay.jpg", "image/jpeg", byte_size(data), checksum: checksum)
+
+      other = binary_part(data, 0, byte_size(data) - 1) <> "x"
+      assert put_file(upload, other, opts).status == 400
+      refute File.exists?(Path.join(root, upload.key))
+
+      # The checksum is signed: another in the URL is refused.
+      forged = String.replace(upload.url, URI.encode_www_form(checksum), "AAAA")
+      assert send(:put, forged, opts, data, [{"content-type", "image/jpeg"}]).status == 403
+
+      assert put_file(upload, data, opts).status == 200
+      assert File.read!(Path.join(root, upload.key)) == data
+    end
+
     test "is taken at the URL it signed, of its type and size, once", %{root: root, public: opts} do
       data = File.read!(Path.join(@fixtures, "harbour.jpg"))
       assert {:ok, upload} = Storehouse.presign_upload("Quay.jpg", "image/jpeg", byte_size(data))

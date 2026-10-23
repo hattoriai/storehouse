@@ -203,6 +203,40 @@ An adapter refuses a key that `Storehouse.valid_key?/1` refuses: no `..`,
 no absolute path, nothing but ASCII letters, digits, `.`, `-`, `_` and
 `/`.
 
+## The same file again
+
+People upload the same file twice: a folder dropped again, a photo in two
+places. Give `:existing`, a function of a checksum (SHA-256, in Base64, as
+`Storehouse.checksum/1` gives it) that finds the file your app has with it,
+and the same file is that file, `{:existing, file}`, with nothing stored
+again:
+
+```elixir
+existing = fn checksum -> Repo.get_by(Photo, account_id: account.id, checksum: checksum) |> then(&(&1 && &1.file)) end
+
+case Storehouse.store(path, owner: "accounts/#{account.id}", existing: existing) do
+  {:ok, file} -> create_photo(account, file)
+  {:existing, file} -> {:ok, find_photo(account, file)}
+  {:error, reason} -> {:error, reason}
+end
+```
+
+For an upload straight to the store, the browser reads the file's SHA-256
+and sends it when it asks to upload: with `:checksum` and `:existing`,
+`presign_upload/4` gives `{:existing, file}` for a file you have, and
+nothing is uploaded. Any other upload is signed with the checksum, so the
+store takes only the bytes that have it: a browser cannot claim another
+file's checksum and be given that file. (S3, and the local plug, check
+it. Allow its headers in the bucket's CORS: see Direct uploads.)
+
+Two people may upload the same file at the same moment, before either is
+saved. `verify_upload/2` with `:existing` checks again with the checksum
+the store keeps, and gives `{:existing, file}` for the second, deleting its
+copy.
+
+Scope the function to the owner, as above: with `:owner`, Storehouse never
+gives back another owner's file, whatever the function answers.
+
 ## Files that belong to an owner
 
 In an app whose files belong to someone (an account, a workspace, a

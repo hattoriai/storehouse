@@ -124,15 +124,13 @@ defmodule Storehouse.Local do
       expires = System.system_time(:second) + Keyword.get(opts, :expires_in, 600)
       type = Map.fetch!(meta, :content_type)
       bytes = Map.fetch!(meta, :bytes)
-      signature = sign(["PUT", key, expires, type, bytes])
+      checksum = meta[:checksum]
+      signature = sign(["PUT", key, expires, type, bytes] ++ List.wrap(checksum))
 
       query =
-        URI.encode_query(%{
-          "expires" => expires,
-          "type" => type,
-          "bytes" => bytes,
-          "signature" => signature
-        })
+        %{"expires" => expires, "type" => type, "bytes" => bytes, "signature" => signature}
+        |> then(&if checksum, do: Map.put(&1, "checksum", checksum), else: &1)
+        |> URI.encode_query()
 
       {:ok, %{method: "PUT", url: url(key) <> "?" <> query, headers: %{"content-type" => type}}}
     end

@@ -78,6 +78,9 @@ It gives your app:
 * **files of an owner** (an account, a workspace): keys under its prefix,
   a key a browser sends back checked to be its, the room it has left
   checked against the size the store gives, and its usage;
+* **the same file again** is the one you have: found by its checksum
+  before it is uploaded (and the upload signed with it, so the store
+  takes only those bytes), or when it is verified, for two at once;
 * **cleanup**: files listed and deleted by prefix (an account's, a
   thousand at a time on S3), deletions tried again until the store
   answers, and temporary files of forms never saved swept, by
@@ -231,7 +234,7 @@ another library is welcome as an issue.
 | Variants | Not yet ([#6](https://github.com/hattoriai/storehouse/issues/6)) | Made at upload | No | Yes | On demand |
 | Placeholders while an image loads | Not yet ([#4](https://github.com/hattoriai/storehouse/issues/4)) | No | No | Yes | No |
 | A table of files | Not yet ([#16](https://github.com/hattoriai/storehouse/issues/16)) | No | No | Yes | Yes |
-| The same file uploaded again is the one kept | Not yet ([#15](https://github.com/hattoriai/storehouse/issues/15)) | No | No | No | No |
+| The same file uploaded again is the one kept | Yes: before the upload, and when it is verified | No | No | No | No |
 | Endpoints and a client for frontends without LiveView | Not yet ([#10](https://github.com/hattoriai/storehouse/issues/10), [#11](https://github.com/hattoriai/storehouse/issues/11)) | No | No | Presign and complete | No |
 | Resumable and multipart uploads from the browser | Not yet ([#12](https://github.com/hattoriai/storehouse/issues/12)) | No | No | No | No |
 | A store in memory, for async tests | Yes, with assertions | No | Yes | Yes | No |
