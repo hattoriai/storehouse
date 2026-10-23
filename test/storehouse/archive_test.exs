@@ -33,6 +33,30 @@ defmodule Storehouse.ArchiveTest do
         do: {List.to_string(name), size}
   end
 
+  # The files of a zip read as a reader reads it as it comes, from each
+  # local header and the stored blocks after it, never the central
+  # directory. (Only the stored blocks this writer makes.)
+  defp forward(
+         <<"PK", 3, 4, _version::16, _flags::16, 8::little-16, _::binary-16, name_size::little-16,
+           extra_size::little-16, rest::binary>>
+       ) do
+    <<name::binary-size(^name_size), _extra::binary-size(^extra_size), data::binary>> = rest
+    {bytes, rest} = stored_blocks(data, [])
+    <<"PK", 7, 8, _crc::32, _sizes::64, rest::binary>> = rest
+    [{name, bytes} | forward(rest)]
+  end
+
+  defp forward(<<"PK", 1, 2, _::binary>>), do: []
+
+  defp stored_blocks(<<final, size::little-16, _nsize::16, rest::binary>>, out) do
+    <<bytes::binary-size(^size), rest::binary>> = rest
+    out = [bytes | out]
+
+    if final == 1,
+      do: {IO.iodata_to_binary(Enum.reverse(out)), rest},
+      else: stored_blocks(rest, out)
+  end
+
   # `unzip -t`, where it is installed: every file's CRC checked.
   defp tested(zip) do
     if unzip = System.find_executable("unzip") do
@@ -81,7 +105,8 @@ defmodule Storehouse.ArchiveTest do
       zip = entries |> made() |> tested()
 
       sizes = methods(zip)
-      assert sizes["harbour.jpg"] == File.stat!(@harbour).size
+      # As it is, in one stored block: five bytes that say its size.
+      assert sizes["harbour.jpg"] == File.stat!(@harbour).size + 5
       assert sizes["export.csv"] < byte_size(@text) / 20
       assert byte_size(zip) < byte_size(@text) / 2
 
@@ -91,6 +116,23 @@ defmodule Storehouse.ArchiveTest do
 
       assert unzipped(tested(made(entries, compression: :compress)))["harbour.jpg"] ==
                File.read!(@harbour)
+    end
+
+    test "a file stored as it is ends where its blocks say, whatever its bytes are" do
+      # A photograph whose bytes end like a file in a zip, and start another.
+      jpeg = <<0xFF, 0xD8, 0xFF, 0xD9>>
+      fake_end = <<"PK", 7, 8, :erlang.crc32(jpeg)::little-32, 4::little-32, 4::little-32>>
+
+      fake_start =
+        <<"PK", 3, 4, 20::little-16, 0::16, 0::16, 0::32, :erlang.crc32("INJECTED")::little-32,
+          8::little-32, 8::little-32, 12::little-16, 0::16>> <> "injected.txt" <> "INJECTED"
+
+      photo = jpeg <> fake_end <> fake_start <> :binary.copy(<<0>>, 100_000)
+      zip = made([{"a/photo.jpg", photo}, {"b/readme.txt", "ok"}], compression: :none)
+
+      # Read as it comes, a file after the other: the two there are.
+      assert forward(zip) == [{"a/photo.jpg", photo}, {"b/readme.txt", "ok"}]
+      assert unzipped(tested(zip)) == %{"a/photo.jpg" => photo, "b/readme.txt" => "ok"}
     end
 
     test "its size before it is made: exact when nothing is compressed", %{photo: photo} do

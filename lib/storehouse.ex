@@ -1325,6 +1325,11 @@ defmodule Storehouse do
       default is 10 seconds.
     * the options of `store/2`; `:max_bytes` stops a download as soon as
       it is larger.
+
+  `:max_bytes` holds for a `200` or `206` answer, which comes a chunk at a
+  time. Any other answer (a redirect, an error, another `2xx`) `:httpc`
+  reads whole before Storehouse sees it, within `:timeout`: allow hosts
+  whose answers no one else makes, not a host of other people's content.
   """
   @spec fetch(String.t(), keyword()) :: {:ok, Storehouse.File.t()} | {:error, term()}
   def fetch(url, opts) when is_binary(url) do
