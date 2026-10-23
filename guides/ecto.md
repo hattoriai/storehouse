@@ -173,3 +173,97 @@ size as stored, an image's EXIF) is not metadata but the file's
 beside it. A file sent as JSON carries its metadata and not its analysis,
 as an EXIF can hold where a photo was taken: `Storehouse.File.to_map/2`
 with `analysis:` sends it when the app wants it to.
+
+## A library of files
+
+A column holds a file one record has: an avatar, an invoice. A library
+holds files that many records use: a site's photographs, used by its
+stories, its pages, its covers, inside their JSON blocks as much as in
+their columns, each kept when the story that first used it is deleted.
+It is optional, and an app that keeps files in columns never sees it.
+
+Its tables come from a migration of the app's:
+
+```elixir
+defmodule MyApp.Repo.Migrations.AddStorehouseBlobs do
+  use Ecto.Migration
+
+  def up, do: Storehouse.Ecto.Migrations.up()
+  def down, do: Storehouse.Ecto.Migrations.down()
+end
+```
+
+`storehouse_blobs` holds a row per file: its key, store, owner, type,
+size, checksum, width, height, metadata and analysis. `storehouse_usages`
+holds which records use each one. A file goes into the library once it
+is stored:
+
+```elixir
+{:ok, file} = Storehouse.store(upload.path, owner: "sites/#{site.id}")
+{:ok, blob} = Storehouse.Ecto.Blob.insert(Repo, file, owner: "sites/#{site.id}")
+```
+
+The same file again for the same owner gives `{:existing, blob}`, the row
+the library already has, by its checksum. `Storehouse.Ecto.Blob.to_file/1`
+gives a row back as a `Storehouse.File`, with its URL, for a page, a
+signed URL or its variants.
+
+### Which records use each file
+
+A record says which files it uses now, each time it is saved, in the same
+transaction. Ids from a form or a document are checked to be the
+owner's first:
+
+```elixir
+Repo.transaction(fn ->
+  story = Repo.update!(changeset)
+  ids = for %{"data" => %{"image_id" => id}} <- story.blocks, do: id
+  {:ok, ids} = Storehouse.Ecto.Blob.owned(Repo, ids, "sites/#{story.site_id}")
+  {:ok, _} = Storehouse.Ecto.Usage.record(Repo, story, ids)
+  story
+end)
+```
+
+`record/4` replaces the record's set: the files it no longer uses are
+let go. A record deleted uses none (`Storehouse.Ecto.Usage.forget/3`). A
+record is named by its table and primary key, so the records of any
+schema use files, with no column for it. In a changeset,
+`Storehouse.Ecto.Blob.validate_owned/5` puts an error on a field of ids
+that are not the owner's.
+
+The library can then say what uses each file, and refuse to delete one
+that is used:
+
+```elixir
+Storehouse.Ecto.Usage.used_by(Repo, blob)
+#=> [%{type: "stories", id: "42"}, %{type: "pages", id: "7"}]
+
+Storehouse.Ecto.Usage.delete(Repo, blob)
+#=> {:error, {:in_use, [%{type: "stories", id: "42"}, %{type: "pages", id: "7"}]}}
+```
+
+Once nothing uses it, `delete/3` deletes the row, and then the file from
+its store. The usage table's foreign key refuses, in the database itself,
+the deletion of a row that a record uses, so a story that starts to use
+a photograph at the moment it is deleted keeps it.
+
+### A table of the app's own
+
+A library with columns of its own (a description, a credit) or table
+names of its own has a schema of the app's with the same fields:
+
+```elixir
+defmodule MyApp.Photo do
+  use Storehouse.Ecto.Blob.Schema, usages: "photo_usages"
+
+  schema "photos" do
+    Storehouse.Ecto.Blob.Schema.fields()
+    field :alt_text, :string
+  end
+end
+```
+
+with `Storehouse.Ecto.Migrations.up(blobs: "photos", usages: "photo_usages")`
+and its columns in its migration, and `schema: MyApp.Photo` given to each
+function: `Storehouse.Ecto.Blob.insert(Repo, file, owner: owner, schema:
+MyApp.Photo, attrs: %{alt_text: alt})`.

@@ -9,6 +9,17 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Added
 
+- A library of files, optional: `Storehouse.Ecto.Migrations` makes a
+  table of files (`storehouse_blobs`, or the app's own names) and of
+  which records use them; `Storehouse.Ecto.Blob` puts a stored file in
+  it (the same file of the same owner one row, `{:existing, blob}`),
+  gives it back as a file, and checks ids are an owner's
+  (`owned/4`, `validate_owned/5`); `Storehouse.Ecto.Usage` keeps each
+  record's set of files (`record/4`, from ids in JSON as much as in
+  columns), says what uses a file (`used_by/3`), and refuses to delete
+  one in use (`delete/3`, `{:error, {:in_use, records}}`), with the
+  database's foreign key behind it. `Storehouse.Ecto.Blob.Schema` for a
+  schema of the app's own.
 - A CDN in front: `:cache_control` on `Storehouse.S3` (and per call, on
   `store/2` and `presign_upload/4`) keeps a `Cache-Control` with each
   file, however it came in (stored, presigned and signed, streamed,
