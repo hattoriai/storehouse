@@ -44,8 +44,9 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Changed
 
-- Storehouse's JSON is in one place, `Storehouse.JSON` (Elixir's own
-  `JSON`): no other part of it calls a JSON library.
+- Storehouse's JSON is in one place, `Storehouse.JSON`: Elixir's own
+  `JSON` when it is there, else Jason. No other part of it calls a JSON
+  library.
 
 - `Storehouse.Ecto.delete_files/2` (and so `update/3` and `delete/3`)
   deletes through `Storehouse.delete_later/2`: retried by the cleaner when
