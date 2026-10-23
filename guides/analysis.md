@@ -156,9 +156,37 @@ In a page, under the photograph:
 ```
 
 and in JSON, for a frontend, with `Storehouse.File.to_map(file, analysis:
-[:placeholder])`. A step of your own, under its own name, takes its place
-for anything else: a BlurHash or ThumbHash, made with the library you
-choose.
+[:placeholder])`.
+
+### Or a hash, for a frontend to decode
+
+Two more steps give the placeholder as a hash, for a page that decodes it
+with a script, each under its own name:
+
+```elixir
+Storehouse.store(upload.path,
+  analyze: [Storehouse.Analyzer.ThumbHash, Storehouse.Analyzer.BlurHash]
+)
+
+Storehouse.File.analyzed(file, :thumbhash)
+#=> %{"thumbhash" => "oTgSNY53eIePiIeGd2iHeXd/iPho", "color" => "#9a7b76",
+#     "width" => 100, "height" => 67}
+Storehouse.File.analyzed(file, :blurhash)
+#=> %{"blurhash" => "L~K++djbazs:}?oLf7oLoboLfjaf", "color" => "#9a7b76",
+#     "width" => 32, "height" => 21}
+```
+
+| | Size | Shows without a script | Transparency | Decoded with |
+|---|---|---|---|---|
+| `Storehouse.Analyzer.Placeholder` | 100 to 400 bytes | Yes, a data URI | Yes (WebP, PNG) | the browser |
+| `Storehouse.Analyzer.ThumbHash` | about 25 bytes | No | Yes | `thumbhash` (npm), ports in most languages |
+| `Storehouse.Analyzer.BlurHash` | 20 to 30 characters | No | No | `blurhash` (npm), `react-blurhash`, ports in most languages |
+
+ThumbHash is truer to a photograph's colours, and keeps its proportions
+in the hash. BlurHash is the one most services and components already
+know. Their encoders, `Storehouse.ThumbHash` and `Storehouse.BlurHash`,
+give the same bytes as the reference implementations from any pixels.
+They are plain Elixir, for an app that has its pixels from elsewhere.
 
 ## A step that changes the file
 

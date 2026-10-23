@@ -13,7 +13,10 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   photograph's placeholder while it loads (a tiny WebP, JPEG or PNG as a
   data URI) and its average colour, with libvips through Vix (optional),
   shrinking it as it loads, turned as its EXIF says, in sRGB, with none of
-  its metadata.
+  its metadata. Or as a hash, for a frontend to decode:
+  `Storehouse.Analyzer.ThumbHash` and `Storehouse.Analyzer.BlurHash`, of
+  `Storehouse.ThumbHash` and `Storehouse.BlurHash`, encoders in plain
+  Elixir that give the reference implementations' bytes.
 - Archives: `Storehouse.Archive` makes an archive of stored files,
   binaries, the app's functions and streams as a stream (`stream/2`), into
   the store as it is made (`store/3`, S3's multipart upload), or out of

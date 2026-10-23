@@ -115,10 +115,10 @@ It gives your app:
   results kept with it and saved in its record's column; and run again
   over a whole table's files, a batch at a time, only where they are
   missing (`mix storehouse.reprocess`);
-* **a placeholder while a photograph loads**: a tiny WebP of it, a few
-  hundred bytes as a data URI, and its average colour, made with libvips
-  as it loads, never decoding a large original whole, with none of its
-  metadata;
+* **a placeholder while a photograph loads**, as you prefer: a tiny WebP
+  of it, a few hundred bytes as a data URI that needs no script, a
+  ThumbHash or a BlurHash, and its average colour, made with libvips as it
+  loads, never decoding a large original whole, with none of its metadata;
 * **a photo's metadata edited without re-encoding it**, when you ask:
   where it was taken removed, only a few tags kept, an author's name
   written in, in a JPEG's, PNG's or WebP's own segments and chunks, its
@@ -265,7 +265,7 @@ another library is welcome as an issue.
 | Several stores at once | Yes: named stores, a store per field, files copied and mirrored between them | Per uploader | Per file | Yes | One at a time |
 | Work after the upload, analysis | Yes: steps of your own, on a runner you choose (Oban's by default), run again over a table's files | No | No | Yes | Yes, on Oban |
 | Variants | Not yet ([#6](https://github.com/hattoriai/storehouse/issues/6)) | Made at upload | No | Yes | On demand |
-| Placeholders while an image loads | Yes: a step you add, a tiny WebP and the average colour, with Vix; or a step of your own (BlurHash) | No | No | Yes | No |
+| Placeholders while an image loads | Yes: a step you add, with Vix: a tiny WebP, a ThumbHash or a BlurHash, and the average colour | No | No | Yes | No |
 | A table of files | Not yet ([#16](https://github.com/hattoriai/storehouse/issues/16)) | No | No | Yes | Yes |
 | The same file uploaded again is the one kept | Yes: before the upload, and when it is verified | No | No | No | No |
 | Endpoints and a client for frontends without LiveView | Yes: endpoints in batches, and a JavaScript client | No | No | Presign and complete | No |
