@@ -9,13 +9,19 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Added
 
-- `Storehouse.Zip`: a zip of stored files, binaries and streams of the
-  app's, made as a stream (`stream/2`) or into the store as it is made
-  (`store/3`, S3's multipart upload), with nothing on the disk and no more
-  than a chunk in memory; files stored as they are, with data descriptors
-  and ZIP64 past 4 GB or 65,535 files. `size/2` gives its exact size
-  before it is made. Names that could leave the folder are refused, and
-  a stored file whose size changed stops the zip.
+- Archives: `Storehouse.Archive` makes an archive of stored files,
+  binaries, the app's functions and streams as a stream (`stream/2`), into
+  the store as it is made (`store/3`, S3's multipart upload), or out of
+  the request as a job of the app's runner, then the app's function with
+  it (`store_later/3`), with nothing on the disk and no more than a chunk
+  in memory. Its formats are of `Storehouse.Archive.Format`: zip
+  (`Storehouse.Archive.Zip`, the default: deflate where it shrinks,
+  AES-256 with a password, ZIP64 past 4 GB or 65,535 files), tar
+  (`Storehouse.Archive.Tar`, pax headers, gzipped when it shrinks), or the
+  app's. `max_bytes:` splits it in whole archives, `expires_in:` makes it
+  expire, and `size/2` gives its size before it is made. Names that could
+  leave the folder are refused, and a stored file whose size changed
+  stops it.
 - Files that expire: `store/2`'s `:expires_in` keeps a file under an
   expiring key (`Storehouse.expiring_key/2`: the prefix
   `Storehouse.expiring_prefix/0`, the days it is kept, when it expires),

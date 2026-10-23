@@ -46,6 +46,9 @@ jobs:
           for i in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:4566/ && exit 0; sleep 1; done
           cat /tmp/moto.log; exit 1
 
+      # 7-Zip, to open the AES-encrypted zips of Storehouse.Archive's tests.
+      - run: sudo apt-get install -y --no-install-recommends p7zip-full
+
       - run: mix deps.get
       - run: mix compile --warnings-as-errors
       - run: mix format --check-formatted

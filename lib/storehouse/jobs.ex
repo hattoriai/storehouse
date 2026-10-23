@@ -65,3 +65,24 @@ defmodule Storehouse.Jobs.Mirror do
          do: Storehouse.Mirror.sync(key, primary, mirror)
   end
 end
+
+defmodule Storehouse.Jobs.Archive do
+  @moduledoc false
+  # An archive made and stored (`Storehouse.Archive.store_later/3`), then
+  # the app's function with it. Its arguments hold the entries and options
+  # as an Erlang term, which only the app writes, and never a password,
+  # only the function that gives it.
+  @behaviour Storehouse.Job
+
+  @doc false
+  def job(entries, key, opts) do
+    term = Base.encode64(:erlang.term_to_binary({entries, key, opts}))
+    Storehouse.Job.new(__MODULE__, %{"term" => term}, unique: "archive:#{key}", max_attempts: 5)
+  end
+
+  @impl Storehouse.Job
+  def perform(%{"term" => term}) do
+    {entries, key, opts} = term |> Base.decode64!() |> :erlang.binary_to_term([:safe])
+    Storehouse.Archive.store_now(entries, key, opts)
+  end
+end

@@ -109,8 +109,14 @@ defmodule Storehouse.MixProject do
           Storehouse,
           Storehouse.File,
           Storehouse.Check,
-          Storehouse.ReadError,
-          Storehouse.Zip
+          Storehouse.ReadError
+        ],
+        Archives: [
+          Storehouse.Archive,
+          Storehouse.Archive.Format,
+          Storehouse.Archive.Entry,
+          Storehouse.Archive.Zip,
+          Storehouse.Archive.Tar
         ],
         Stores: [
           Storehouse.Adapter,
