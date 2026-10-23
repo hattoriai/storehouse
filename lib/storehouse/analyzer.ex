@@ -89,10 +89,11 @@ defmodule Storehouse.Analyzer do
     do: Code.ensure_loaded?(module) and function_exported?(module, function, arity)
 
   @doc false
-  # The steps of a file, run in order: `{:ok, file}` with each one's result,
-  # or `{:error, reason}` when the file could not be read for them.
+  # The steps of a file, run in order: `{:ok, file, names}` with each one's
+  # analysis and the names of those that ran, or `{:error, reason}` when
+  # the file could not be read for them.
   @spec run(Storehouse.File.t(), [step()], keyword()) ::
-          {:ok, Storehouse.File.t()} | {:error, term()}
+          {:ok, Storehouse.File.t(), [String.t()]} | {:error, term()}
   def run(%Storehouse.File{} = file, steps, opts) do
     force = Keyword.get(opts, :force, false)
     steps = steps |> Enum.map(&normalize/1) |> Enum.filter(&(force or not done?(file, &1)))
@@ -103,7 +104,7 @@ defmodule Storehouse.Analyzer do
           do: {module, Keyword.put_new(step_opts, :adapter, opts[:adapter])}
 
     with_source(file, steps, opts, fn path ->
-      {:ok, Enum.reduce(steps, file, &run_step(&2, &1, path))}
+      {:ok, Enum.reduce(steps, file, &run_step(&2, &1, path, opts)), Enum.map(steps, &name/1)}
     end)
   end
 
@@ -146,13 +147,17 @@ defmodule Storehouse.Analyzer do
     end
   end
 
-  defp run_step(file, {module, step_opts} = step, path) do
+  defp run_step(file, {module, step_opts} = step, path, opts) do
     name = name(step)
     meta = %{key: file.key, step: name}
     path = if needs_file?(step), do: path
 
     :telemetry.span([:storehouse, :analyze], meta, fn ->
       {result, file} = keep(file, name, safely(module, file, path, step_opts))
+
+      with {:error, reason} <- result,
+           do: Storehouse.Notify.notify(:failed, %{file: file, step: name, reason: reason}, opts)
+
       {file, Map.merge(meta, outcome(result))}
     end)
   end

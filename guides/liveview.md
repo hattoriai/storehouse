@@ -84,3 +84,44 @@ uploads (`Storehouse.S3`, and `Storehouse.Local` in development), or, with
 with no file on the app's disk: `consume/3` gives them stored and
 checked. See [Direct uploads](direct_uploads.md), and [Ecto](ecto.md)
 for files in records.
+
+## What happens to files, live
+
+A photo's analysis may finish after the LiveView that uploaded it has
+moved on, and other people may have the page open. Tell your app what
+happens to files (`Storehouse.Notify`), and broadcast it on your PubSub,
+on a topic of each account:
+
+```elixir
+# config/config.exs
+config :storehouse,
+  notify: {Storehouse.Notify.PubSub, :broadcast, [MyApp.PubSub, {MyApp.Files, :topic, []}]}
+```
+
+```elixir
+defmodule MyApp.Files do
+  # Keys made with a prefix per account (`key:`): "accounts/42/…".
+  def topic(%{file: %{key: key}}), do: topic_of(key)
+  def topic(%{key: key}), do: topic_of(key)
+  def topic(_info), do: nil
+
+  defp topic_of("accounts/" <> rest), do: "files:" <> hd(String.split(rest, "/"))
+  defp topic_of(_key), do: nil
+end
+```
+
+```elixir
+def mount(_params, _session, socket) do
+  if connected?(socket), do: Phoenix.PubSub.subscribe(MyApp.PubSub, "files:#{socket.assigns.account.id}")
+  {:ok, socket}
+end
+
+def handle_info({:storehouse, :analyzed, %{file: file}}, socket),
+  do: {:noreply, update_photo(socket, file)}
+
+def handle_info({:storehouse, _event, _info}, socket), do: {:noreply, socket}
+```
+
+`:analyzed` from `Storehouse.analyze_later/3` comes once its `:then` has
+the results, so a LiveView that reloads the record finds them saved. A
+JavaScript client follows the same topic through a Phoenix Channel.
