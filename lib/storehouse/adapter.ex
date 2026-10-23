@@ -232,6 +232,13 @@ defmodule Storehouse.Adapter do
   @doc "The parts the store has of an upload: `{:ok, parts}`, by number."
   @callback multipart_parts(key(), String.t()) :: {:ok, [part()]} | {:error, term()}
 
+  @doc """
+  Sends part `number` of an upload from the app itself (`Storehouse.Tus.Plug`),
+  with its SHA-256, which the store checks: `{:ok, part}`.
+  """
+  @callback multipart_put(key(), String.t(), pos_integer(), binary()) ::
+              {:ok, part()} | {:error, term()}
+
   @doc "Puts the parts together: the file is then under its key."
   @callback multipart_complete(key(), String.t(), [part()]) :: :ok | {:error, term()}
 
@@ -249,6 +256,7 @@ defmodule Storehouse.Adapter do
   @optional_callbacks uploaded: 1,
                       multipart_start: 2,
                       multipart_sign: 4,
+                      multipart_put: 4,
                       multipart_parts: 2,
                       multipart_complete: 3,
                       multipart_abort: 2,

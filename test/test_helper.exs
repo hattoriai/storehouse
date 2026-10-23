@@ -11,6 +11,12 @@ exclude =
     node: !System.find_executable("node"),
     # An encrypted zip opened by 7-Zip, where it is installed.
     sevenzip: !System.find_executable("7z"),
+    # A tus client: Python's tuspy, where it is installed.
+    tuspy:
+      System.cmd(System.get_env("STOREHOUSE_PYTHON", "python3"), ["-c", "import tusclient"],
+        stderr_to_stdout: true
+      )
+      |> elem(1) != 0,
     # A zip past 4 GB, on the disk: STOREHOUSE_LARGE=1.
     large: !System.get_env("STOREHOUSE_LARGE")
   ]

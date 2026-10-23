@@ -9,6 +9,15 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Added
 
+- Resumable uploads by the tus protocol (1.0.0, with creation,
+  creation-with-upload, termination and expiration):
+  `Storehouse.Tus.Plug`, through the app, into a bucket's multipart
+  upload a part at a time (the adapter's `multipart_put/4`), or into a
+  file stored when it is whole, checked as every upload is; the uploads
+  in progress kept in ETS by `Storehouse.Tus`, which gives up those that
+  expired, or in a `Storehouse.Tus.State` of the app's. Tested against
+  tuspy, a tus client.
+
 - Very large files sent from the browser straight to the bucket in parts:
   `Storehouse.presign_multipart/4` (checked as `presign_upload/4` is,
   with parts of a size S3 takes), `presign_parts/4` (each part signed
@@ -236,6 +245,9 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Fixed
 
+- The plugs of uploads from any client (`Storehouse.Plug.Presign`,
+  `Register`, `Multipart`) lost their options when a server called their
+  `init/1` again on options already made (Bandit with `plug: {plug, opts}`).
 - `Storehouse.S3` sent a `PUT` without a body (a copy) as
   `application/octet-stream`, whatever type it signed.
 
