@@ -62,9 +62,17 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   (`:storage_full`): at presign by the size declared, at `verify_upload/2`
   by the size the store gives. `Storehouse.usage/2` counts an owner's
   files in the store.
+- The images of cameras and phones, checked by their bytes: HEIC and
+  HEIF, AVIF (the primary image's size, cropped and turned as its `clap`
+  and `irot` say), TIFF in either byte order (turned as its orientation
+  says), and DNG as `image/x-adobe-dng`, a download. `Storehouse.Check.photos/0`
+  lists those a page can show beside PNG, JPEG, GIF and WebP;
+  `images/0` is as it was.
 
 ### Changed
 
+- A file with a HEIF `ftyp` box was `application/octet-stream`; it is now
+  `image/heic`, `image/heif` or `image/avif`.
 - Storehouse's JSON is in one place, a module of its own: the app's
   `config :storehouse, :json_library`, else Elixir's own `JSON` when it
   is there, else Jason. No other part of it calls a JSON library.
