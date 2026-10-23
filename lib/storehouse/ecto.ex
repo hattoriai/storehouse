@@ -83,6 +83,56 @@ if Code.ensure_loaded?(Ecto.Changeset) do
       end
     end
 
+    @doc """
+    Merges `metadata` into the metadata of the file in `field`
+    (`Storehouse.File.put_metadata/2`): a caption, a credit, what a person
+    entered. For a list field, give the `key` of the file. Metadata that
+    JSON cannot hold is an error of the field (`validation: :storehouse`,
+    `reason: {:invalid_metadata, path}`); a field with no such file is left
+    as it is.
+
+        photo
+        |> Storehouse.Ecto.put_metadata(:image, %{"caption" => params["caption"]})
+        |> Repo.update()
+    """
+    @spec put_metadata(Ecto.Changeset.t(), atom(), map()) :: Ecto.Changeset.t()
+    def put_metadata(changeset, field, metadata) do
+      case get_field(changeset, field) do
+        %Storehouse.File{} = file -> put_metadata_of(changeset, field, file, metadata, & &1)
+        _none -> changeset
+      end
+    end
+
+    @spec put_metadata(Ecto.Changeset.t(), atom(), Storehouse.Adapter.key(), map()) ::
+            Ecto.Changeset.t()
+    def put_metadata(changeset, field, key, metadata) when is_binary(key) do
+      files = get_field(changeset, field) || []
+
+      case Enum.find(files, &(&1.key == key)) do
+        nil ->
+          changeset
+
+        file ->
+          put_metadata_of(changeset, field, file, metadata, &replace_file(files, key, &1))
+      end
+    end
+
+    defp replace_file(files, key, updated),
+      do: Enum.map(files, fn file -> if file.key == key, do: updated, else: file end)
+
+    defp put_metadata_of(changeset, field, file, metadata, value) do
+      case Storehouse.File.put_metadata(file, metadata) do
+        {:ok, updated} ->
+          put_change(changeset, field, value.(updated))
+
+        {:error, reason} ->
+          add_error(changeset, field, "has metadata that cannot be kept",
+            validation: :storehouse,
+            reason: reason
+          )
+      end
+    end
+
     defp refusal(%Storehouse.File{} = file, opts) do
       pixels = if is_integer(file.width), do: file.width * (file.height || 0)
 

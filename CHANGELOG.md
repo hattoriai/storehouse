@@ -31,6 +31,16 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   `put_upload/2` for the browser's part of a direct upload.
   `Storehouse.Test`: `assert_stored/1`, `refute_stored/1` and
   `stored_files/0`.
+- A file's own metadata: `metadata` on `Storehouse.File` (`%{}` by
+  default), kept by `Storehouse.Ecto.File`, given with `store/2`'s and
+  `verify_upload/2`'s `:metadata` and merged with
+  `Storehouse.File.put_metadata/2` and `Storehouse.Ecto.put_metadata/3,4`.
+  `Storehouse.Metadata` keeps it to what JSON and `jsonb` hold. The key
+  `"analyzed"` is the analysis's (`Storehouse.File.put_analyzed/3`,
+  `analyzed/2`), never written by `put_metadata/2`.
+- `Storehouse.File` as JSON (`JSON.Encoder`, and `Jason.Encoder` with
+  Jason), without the analysis's metadata; `Storehouse.File.to_map/2`
+  chooses what goes.
 
 ### Changed
 

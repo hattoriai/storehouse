@@ -104,6 +104,9 @@ defmodule Storehouse do
     * `:adapter` - the store. The default is `adapter/0`.
     * `:key` - a function of the name and the checked content type that
       gives the key. The default is `&key/2`.
+    * `:metadata` - the file's own (`Storehouse.Metadata`): a caption, a
+      credit. Metadata that JSON cannot hold gives
+      `{:error, {:invalid_metadata, path}}`, and nothing is stored.
     * `:cache` - `true` stores the file under the temporary prefix
       (`cache_prefix/0`), until `promote/2` makes it permanent: an upload
       of a form that may never be saved.
@@ -124,7 +127,8 @@ defmodule Storehouse do
     claim =
       Keyword.get_lazy(opts, :content_type, fn -> Check.content_type(Path.extname(name)) end)
 
-    with {:ok, description} <- Check.describe(path, claim, opts),
+    with {:ok, metadata} <- initial_metadata(opts),
+         {:ok, description} <- Check.describe(path, claim, opts),
          :ok <- accepted(description.content_type, Keyword.get(opts, :accept)),
          {:ok, key} <- new_key(opts, name, description.content_type),
          checksum = checksum(path),
@@ -143,10 +147,20 @@ defmodule Storehouse do
         bytes: description.bytes,
         width: description.width,
         height: description.height,
-        checksum: checksum
+        checksum: checksum,
+        metadata: metadata
       }
 
       {:ok, preview(file, path, Keyword.get(opts, :preview))}
+    end
+  end
+
+  # The metadata a new file starts with: the app's, never the analysis's.
+  defp initial_metadata(opts) do
+    with {:ok, metadata} <- Storehouse.Metadata.normalize(Keyword.get(opts, :metadata, %{})) do
+      if Map.has_key?(metadata, "analyzed"),
+        do: {:error, {:invalid_metadata, ["analyzed"]}},
+        else: {:ok, metadata}
     end
   end
 
@@ -340,6 +354,7 @@ defmodule Storehouse do
   ## Options
 
     * `:name` - the file's name, for display. The default is the key's.
+    * `:metadata` - as for `store/2`.
     * `:accept`, `:max_bytes`, `:max_pixels`, `:adapter`, as for
       `store/2`.
     * `:preview` - as for `store/2`, with `nil` for the path: the file is
@@ -359,6 +374,7 @@ defmodule Storehouse do
     signed = Check.content_type(Path.extname(key))
 
     with true <- valid_key?(key) || {:error, :invalid_key},
+         {:ok, metadata} <- initial_metadata(opts),
          :ok <- supported(adapter, :read_head, 2),
          {:ok, head, size} <- adapter.read_head(key, Check.head_size()),
          {:ok, description} <-
@@ -371,7 +387,8 @@ defmodule Storehouse do
         bytes: description.bytes,
         width: description.width,
         height: description.height,
-        checksum: stored_checksum(adapter, key)
+        checksum: stored_checksum(adapter, key),
+        metadata: metadata
       }
 
       {:ok, preview(file, nil, Keyword.get(opts, :preview))}

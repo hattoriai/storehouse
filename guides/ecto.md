@@ -133,3 +133,32 @@ Storehouse.Ecto.delete_files(Storehouse.Ecto.replaced(changeset, user))
 `Storehouse.Ecto.File` casts a `Storehouse.File` only, never a map of a
 form's params: a file's key comes from Storehouse, never from a browser,
 so that no one puts another's file in their record.
+
+## Metadata of your own
+
+A file keeps metadata of the app's own: a caption, a credit, a
+description for readers who cannot see it. Give it when the file is
+stored, or put it later, merged with what the file has:
+
+```elixir
+{:ok, file} = Storehouse.store(path, metadata: %{caption: "The quay"})
+
+photo
+|> change()
+|> Storehouse.Ecto.put_metadata(:image, %{"alt" => params["alt"]})
+|> Repo.update()
+
+# In a list field, the file by its key.
+Storehouse.Ecto.put_metadata(changeset, :photos, file.key, %{"caption" => caption})
+```
+
+It goes into the column with the file, so it holds what JSON holds
+(`Storehouse.Metadata`): string keys, strings, numbers, booleans, `nil`,
+lists and maps. Anything else is an error of the field, with where it is.
+
+The key `"analyzed"` is for what is read from the file itself (its size
+as stored, an image's EXIF), each step its own part of it
+(`Storehouse.File.put_analyzed/3`), and `put_metadata` never writes it.
+A file sent as JSON carries its metadata without that part, as an EXIF
+can hold where a photo was taken: `Storehouse.File.to_map/2` with
+`analyzed:` sends it when the app wants it to.

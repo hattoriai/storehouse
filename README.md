@@ -80,6 +80,9 @@ It gives your app:
 * **files read back**: a file's size and type without reading it, its
   bytes all at once, as a stream a chunk at a time, or to a path, each
   refused past a size limit before a byte is read;
+* **metadata of your own** on each file (a caption, a credit), kept in
+  its column and sent in its JSON, apart from what analysis reads from
+  the file, which stays out of the JSON unless you ask for it;
 * **limits**: the largest file, the most pixels of an image, the types
   you take;
 * **checksums**: each file's SHA-256, kept with it, and checked by S3 as
@@ -209,6 +212,7 @@ another library is welcome as an issue.
 | Files from an address | Yes, from allowed hosts only | Yes, size-capped | No | No | No |
 | LiveView uploads | Yes | No | No | Partly | No |
 | Reading a file back | Yes | Yes | Yes | Yes | Yes |
+| A file's own metadata | Yes, kept apart from the analysis's | No | Yes | Yes | Yes, shared with the analysis's |
 | Several stores at once | Not yet ([#1](https://github.com/hattoriai/storehouse/issues/1)) | Per uploader | Per file | Yes | One at a time |
 | Work after the upload, analysis | Not yet ([#3](https://github.com/hattoriai/storehouse/issues/3)) | No | No | Yes | Yes, on Oban |
 | Variants | Not yet ([#6](https://github.com/hattoriai/storehouse/issues/6)) | Made at upload | No | Yes | On demand |
