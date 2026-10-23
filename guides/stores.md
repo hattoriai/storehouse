@@ -203,6 +203,38 @@ An adapter refuses a key that `Storehouse.valid_key?/1` refuses: no `..`,
 no absolute path, nothing but ASCII letters, digits, `.`, `-`, `_` and
 `/`.
 
+## Files that belong to an owner
+
+In an app whose files belong to someone (an account, a workspace, a
+site), give `:owner`, and each file's key is under the owner's prefix:
+
+```elixir
+{:ok, file} = Storehouse.store(path, owner: "accounts/#{account.id}")
+file.key
+#=> "accounts/42/2026/10/0b6…-palette.png"
+```
+
+`store/2`, `presign_upload/4`, `Storehouse.Live.allow/3` and its
+`consume/3` take it. A key a browser sends back is only a claim: check it
+is the owner's before you take it. `verify_upload/2` and
+`Storehouse.Ecto.put_file/4` do, with `:owner`, and refuse another's with
+`:not_owner`, leaving that file where it is. `Storehouse.owns?/2` checks a
+key yourself.
+
+`:room` is what the owner may still store, in bytes: a file larger than it
+is refused with `{:error, :storage_full}`. Presigning checks the size the
+browser declared; `verify_upload/2` checks the size the store has, and
+deletes a file that does not fit.
+
+```elixir
+room = account.storage_limit - account.storage_used
+Storehouse.presign_upload(name, type, bytes, owner: "accounts/#{account.id}", room: room)
+```
+
+`Storehouse.usage/2` counts an owner's files in the store itself, and
+`Storehouse.delete_prefix("accounts/42/")` deletes them, when the account
+goes.
+
 ## Files from the server
 
 A seed, an import or a file the app makes itself is stored the same way,

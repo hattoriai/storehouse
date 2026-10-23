@@ -45,15 +45,19 @@ defmodule StorehouseTest.UploadLive do
 end
 
 defmodule StorehouseTest.DirectLive do
-  @moduledoc "A LiveView whose files go straight to the store (Storehouse.Live.allow/3)."
+  @moduledoc """
+  A LiveView whose files go straight to the store (Storehouse.Live.allow/3),
+  an owner's at /direct/:owner.
+  """
   use Phoenix.LiveView
 
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(params, _session, socket) do
     {:ok,
      socket
-     |> assign(results: [])
+     |> assign(results: [], owner: params["owner"])
      |> Storehouse.Live.allow(:photos,
+       owner: params["owner"],
        accept: ~w(.png .jpg .jpeg),
        max_file_size: 100_000,
        max_entries: 3,
@@ -64,7 +68,10 @@ defmodule StorehouseTest.DirectLive do
 
   defp progress(:photos, _entry, socket) do
     {socket, results} =
-      Storehouse.Live.consume(socket, :photos, accept: Storehouse.Check.images())
+      Storehouse.Live.consume(socket, :photos,
+        accept: Storehouse.Check.images(),
+        owner: socket.assigns.owner
+      )
 
     {:noreply, assign(socket, :results, socket.assigns.results ++ Enum.map(results, &describe/1))}
   end
@@ -146,6 +153,7 @@ defmodule StorehouseTest.Router do
     pipe_through(:browser)
     live("/", StorehouseTest.UploadLive)
     live("/direct", StorehouseTest.DirectLive)
+    live("/direct/:owner", StorehouseTest.DirectLive)
     live("/stream", StorehouseTest.StreamLive)
   end
 end

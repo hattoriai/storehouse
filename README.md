@@ -74,6 +74,9 @@ It gives your app:
 * **files from an address**, from the hosts you allow only, with
   redirects checked and the download stopped at the size limit: an image
   pasted by its address, a file an agent names;
+* **files of an owner** (an account, a workspace): keys under its prefix,
+  a key a browser sends back checked to be its, the room it has left
+  checked against the size the store gives, and its usage;
 * **cleanup**: files listed and deleted by prefix (an account's, a
   thousand at a time on S3), deletions tried again until the store
   answers, and temporary files of forms never saved swept, by

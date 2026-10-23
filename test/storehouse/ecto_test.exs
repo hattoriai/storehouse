@@ -323,4 +323,18 @@ defmodule Storehouse.EctoTest do
              }
     end
   end
+
+  test "a record never takes another owner's file" do
+    {:ok, theirs} =
+      Storehouse.store(Path.join(@fixtures, "small.png"), owner: "accounts/7", cache: true)
+
+    {:ok, mine} =
+      Storehouse.store(Path.join(@fixtures, "small.png"), owner: "accounts/42", cache: true)
+
+    changeset = changeset(%User{}, %{name: "Ana"}, theirs, owner: "accounts/42")
+    refute changeset.valid?
+    assert [avatar: {_message, [validation: :storehouse, reason: :not_owner]}] = changeset.errors
+
+    assert changeset(%User{}, %{name: "Ana"}, mine, owner: "accounts/42").valid?
+  end
 end
