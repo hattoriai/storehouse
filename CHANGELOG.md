@@ -26,6 +26,18 @@ The first release: the storage of Kotoba and Hakushi, taken out of them.
 - `Storehouse.fetch/2`: a file from an address of the hosts an app
   allows, with redirects checked and the download stopped at
   `:max_bytes`.
+- `Storehouse.S3`: Amazon S3, and the stores that speak its API
+  (Cloudflare R2, MinIO, Tigris, LocalStack), with no other library: it
+  signs its requests itself (Signature Version 4).
+- Direct uploads: `Storehouse.presign_upload/4` signs an upload the
+  browser makes straight to the store (its key, type and size), and
+  `Storehouse.verify_upload/2` checks the file there by its first bytes,
+  and deletes it when it is not what it said. `Storehouse.Live.allow/3`
+  does both for a LiveView upload, with the uploader of `storehouse.js`.
+  `Storehouse.Local.Plug` takes direct uploads too, for development.
+- Private files: `Storehouse.signed_url/2`, from S3 or the local plug
+  (`private: true` serves only signed URLs), and `Storehouse.Redirect`,
+  a lasting URL that checks the person and redirects to a signed one.
 - `Storehouse.Live.consume/3`: the files of a LiveView upload, each
   stored once, with a result for each.
 - Keys (`Storehouse.key/2`, `safe_name/2`, `valid_key?/1`), display names

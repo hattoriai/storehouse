@@ -12,8 +12,10 @@ It is the storage of the Hattori libraries, taken out of them: Kotoba's
 attachments and Hakushi's images keep their files with it, and so can
 your app.
 
-> **Status: early release.** Checking, storing, the local store and its
-> plug, files from an address, and LiveView uploads are here. Before 1.0,
+> **Status: early release.** Checking, storing, the local disk and S3
+> (and the stores that speak its API), uploads straight to the store,
+> signed URLs for private files, files from an address, and LiveView
+> uploads are here. Before 1.0,
 > a minor version may change the API; see the roadmap for what comes
 > next.
 
@@ -40,8 +42,17 @@ It gives your app:
 * **safe keys**: `yyyy/mm/<uuid>-<safe name><extension>`, whose
   extension comes from the checked type, so a key never ends in `.html`;
   an adapter refuses any key that could leave its root;
-* **stores of your own**: three callbacks (`put`, `url`, `delete`); the
-  local disk is built in, and S3 is a page of code;
+* **stores**: the local disk, and S3 with the stores that speak its API
+  (Cloudflare R2, MinIO, Tigris, LocalStack), with no other library; or
+  one of your own, in three callbacks;
+* **uploads straight to the store**: the browser sends a file to the
+  bucket at a URL your app signed (its type, its size, ten minutes), so a
+  large file never goes through your app, and Storehouse checks it there
+  by its first bytes; in development, to your app's own plug, the same
+  way;
+* **private files**: signed URLs that expire, from S3 or the local plug,
+  and `Storehouse.Redirect`, a lasting URL of your app that checks the
+  person and redirects to a fresh one;
 * **serving that is safe**: `Storehouse.Local.Plug` sends the checked
   type, `nosniff`, a sandboxing CSP, downloads for every type a browser
   should not show, and byte ranges, for video;
@@ -118,34 +129,44 @@ Storehouse.fetch("https://images.example.com/board.png",
 )
 ```
 
-The guides: [Stores](guides/stores.md) (the local disk, S3, private
-files), [Serving](guides/serving.md) and [LiveView](guides/liveview.md).
-
-## Kotoba and Hakushi
-
-Kotoba (`Kotoba.Storage`) and Hakushi (`Hakushi.Storage`) had stores of
-their own, with these same three callbacks: an adapter written for
-either of them is a Storehouse adapter as it is. As they move onto
-Storehouse, each keeps its own config working, and an app with both
-sets its store once:
+Straight to the store, with S3 in production and the local disk (or
+LocalStack) in development:
 
 ```elixir
-config :storehouse, adapter: MyApp.Storage
+socket
+|> Storehouse.Live.allow(:photos, accept: ~w(.png .jpg .jpeg), max_file_size: 50_000_000, auto_upload: true, progress: &handle_progress/3)
 ```
+
+```javascript
+import {Uploaders} from "storehouse"
+let liveSocket = new LiveSocket("/live", Socket, {uploaders: Uploaders, params: {_csrf_token: csrfToken}})
+```
+
+A private file:
+
+```elixir
+{:ok, url} = Storehouse.signed_url(file.key, expires_in: 300)
+```
+
+The guides: [Stores](guides/stores.md) (the local disk, S3, LocalStack,
+development), [Direct uploads](guides/direct_uploads.md),
+[Private files](guides/private_files.md), [Serving](guides/serving.md)
+and [LiveView](guides/liveview.md).
 
 ## Roadmap
 
-* **Uploads straight to the store.** LiveView's external uploads with
-  presigned URLs, so that a large file never goes through the app.
-* **Signed, expiring URLs** for private files, with a plug that checks
-  them.
-* **Records of files** (optional, with Ecto): what is stored, and what
-  uses it.
+* **Records of files** (optional, with Ecto): what is stored, its
+  checksum, and what uses it.
 * **Cleanup**: the files nothing uses any more, deleted after a while
-  (so that an undo still finds them).
-* **Previews made for you**: thumbnails with an optional image library,
-  cached.
-* **More types**: audio, and the length of a video.
+  (so that an undo still finds them), and uploads never kept.
+* **Variants**: images resized and converted when they are asked for
+  (with an optional image library), kept beside the file.
+* **Previews made for you**: a PDF's first page, a video's poster.
+* **More of what a file is**: a video's length and size, audio.
+* **A mirror**: writing to two stores at once, to move from one to the
+  other.
+* **Proxying** a private bucket's files through the app, for a CDN in
+  front of it.
 
 ## Development
 

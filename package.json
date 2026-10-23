@@ -1,0 +1,15 @@
+{
+  "name": "storehouse",
+  "version": "0.1.0",
+  "description": "Files for Phoenix: the uploader of Storehouse's direct uploads, for LiveView.",
+  "license": "MIT",
+  "module": "./priv/static/storehouse.js",
+  "main": "./priv/static/storehouse.cjs.js",
+  "exports": {
+    ".": {
+      "import": "./priv/static/storehouse.js",
+      "require": "./priv/static/storehouse.cjs.js"
+    }
+  },
+  "files": ["priv/static/storehouse.js", "priv/static/storehouse.cjs.js", "README.md", "LICENSE"]
+}

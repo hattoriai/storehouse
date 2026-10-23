@@ -79,4 +79,38 @@ defmodule Storehouse.Adapter do
 
   @doc "Deletes the file with `key`. A key with no file gives `:ok`."
   @callback delete(key()) :: :ok | {:error, term()}
+
+  @typedoc """
+  An upload a browser makes, straight to the store: an HTTP `method`, a
+  `url` that carries its signature, and the `headers` it sends as they
+  are.
+  """
+  @type upload :: %{method: String.t(), url: String.t(), headers: %{String.t() => String.t()}}
+
+  @doc """
+  An upload of the file with `key` that a browser makes itself, without
+  the store's keys, valid `opts[:expires_in]` seconds: of `meta.bytes`
+  bytes exactly, of the type `meta.content_type`. Optional: a store
+  without it takes its files through the app (`Storehouse.store/2`).
+  See `Storehouse.presign_upload/4`.
+  """
+  @callback presign_upload(key(), meta(), opts :: keyword()) :: {:ok, upload()} | {:error, term()}
+
+  @doc """
+  A URL of the file with `key` that is valid `opts[:expires_in]` seconds,
+  for a file that is not public. `opts[:disposition]` is `"inline"` or
+  `"attachment"`, and `opts[:filename]` the name a download gets, when
+  given. Optional. See `Storehouse.signed_url/2`.
+  """
+  @callback signed_url(key(), opts :: keyword()) :: {:ok, String.t()} | {:error, term()}
+
+  @doc """
+  The first `bytes` bytes of the file with `key` (all of it, when it is
+  shorter), and its size: to check a file uploaded straight to the store.
+  Optional; needed with `c:presign_upload/3`.
+  """
+  @callback read_head(key(), bytes :: pos_integer()) ::
+              {:ok, head :: binary(), size :: non_neg_integer()} | {:error, term()}
+
+  @optional_callbacks presign_upload: 3, signed_url: 2, read_head: 2
 end

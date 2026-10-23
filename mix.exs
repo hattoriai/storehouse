@@ -71,7 +71,8 @@ defmodule Storehouse.MixProject do
       name: "storehouse",
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib mix.exs .formatter.exs guides README.md CHANGELOG.md LICENSE NOTICE)
+      files:
+        ~w(lib priv/static/storehouse.js priv/static/storehouse.cjs.js package.json mix.exs .formatter.exs guides README.md CHANGELOG.md LICENSE NOTICE)
     ]
   end
 
@@ -86,11 +87,14 @@ defmodule Storehouse.MixProject do
         "guides/stores.md",
         "guides/serving.md",
         "guides/liveview.md",
+        "guides/direct_uploads.md",
+        "guides/private_files.md",
         "CHANGELOG.md"
       ],
       groups_for_modules: [
         Files: [Storehouse, Storehouse.File, Storehouse.Check],
-        Stores: [Storehouse.Adapter, Storehouse.Local, Storehouse.Local.Plug],
+        Stores: [Storehouse.Adapter, Storehouse.Local, Storehouse.Local.Plug, Storehouse.S3],
+        "Private files": [Storehouse.Redirect],
         LiveView: [Storehouse.Live]
       ]
     ]

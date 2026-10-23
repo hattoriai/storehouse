@@ -28,6 +28,14 @@ defmodule Storehouse.Local do
       files, this is a path, not a full URL: the plug matches requests
       under it.
 
+    * `:secret` - a secret of at least 32 bytes, for signed URLs
+      (`Storehouse.signed_url/2`) and uploads straight from the browser
+      (`Storehouse.presign_upload/4`): the plug serves and takes only what
+      it signed. Give one from the environment in production, as the
+      endpoint's `secret_key_base` is:
+
+          config :storehouse, Storehouse.Local, secret: System.fetch_env!("STOREHOUSE_SECRET")
+
   Serve the files with `Storehouse.Local.Plug`. Any other way to serve
   them must send `X-Content-Type-Options: nosniff`, a content type from the
   allow-list of `Storehouse.Check`, and `Content-Disposition: attachment`
@@ -104,6 +112,105 @@ defmodule Storehouse.Local do
   @doc "Returns the configured URL prefix, by default `\"#{@default_prefix}\"`."
   @spec url_prefix() :: String.t()
   def url_prefix, do: Keyword.get(config(), :url_prefix, @default_prefix)
+
+  @impl Storehouse.Adapter
+  def presign_upload(key, meta, opts) do
+    with {:ok, _path} <- path(key) do
+      expires = System.system_time(:second) + Keyword.get(opts, :expires_in, 600)
+      type = Map.fetch!(meta, :content_type)
+      bytes = Map.fetch!(meta, :bytes)
+      signature = sign(["PUT", key, expires, type, bytes])
+
+      query =
+        URI.encode_query(%{
+          "expires" => expires,
+          "type" => type,
+          "bytes" => bytes,
+          "signature" => signature
+        })
+
+      {:ok, %{method: "PUT", url: url(key) <> "?" <> query, headers: %{"content-type" => type}}}
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def signed_url(key, opts) do
+    with {:ok, _path} <- path(key) do
+      expires = System.system_time(:second) + Keyword.get(opts, :expires_in, 300)
+      disposition = disposition(opts)
+
+      params =
+        %{"expires" => expires, "signature" => sign(["GET", key, expires, disposition])}
+        |> then(&if disposition == "", do: &1, else: Map.put(&1, "disposition", disposition))
+
+      {:ok, url(key) <> "?" <> URI.encode_query(params)}
+    end
+  end
+
+  # `attachment; filename="board.png"`, or "" for the plug's own.
+  defp disposition(opts) do
+    case {opts[:disposition], opts[:filename]} do
+      {nil, nil} ->
+        ""
+
+      {kind, nil} ->
+        to_string(kind)
+
+      {kind, name} ->
+        ~s(#{kind || "attachment"}; filename="#{String.replace(name, ~r/[^A-Za-z0-9._\- ]/, "_")}")
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def read_head(key, bytes) do
+    with {:ok, path} <- path(key),
+         {:ok, %File.Stat{size: size, type: :regular}} <- File.stat(path),
+         {:ok, read} <- File.open(path, [:read, :binary], &IO.binread(&1, bytes)) do
+      case read do
+        :eof -> {:ok, "", size}
+        {:error, reason} -> {:error, reason}
+        head -> {:ok, head, size}
+      end
+    else
+      {:ok, %File.Stat{}} -> {:error, :enoent}
+      error -> error
+    end
+  end
+
+  @doc false
+  # The signature of a request the plug takes: its parts, joined.
+  def sign(parts) do
+    :crypto.mac(:hmac, :sha256, secret(), Enum.join(parts, "\n"))
+    |> Base.url_encode64(padding: false)
+  end
+
+  @doc false
+  # Whether a request's signature is this store's, for its parts, and it
+  # has not expired.
+  def signed?(parts, expires, signature) when is_binary(signature) do
+    with {expires, ""} <- Integer.parse(to_string(expires)),
+         true <- expires >= System.system_time(:second) do
+      Plug.Crypto.secure_compare(sign(parts), signature)
+    else
+      _other -> false
+    end
+  end
+
+  def signed?(_parts, _expires, _signature), do: false
+
+  defp secret do
+    case Keyword.get(config(), :secret) do
+      secret when is_binary(secret) and byte_size(secret) >= 32 ->
+        secret
+
+      _missing ->
+        raise ArgumentError, """
+        Storehouse.Local needs a secret of at least 32 bytes for signed URLs and uploads:
+
+            config :storehouse, Storehouse.Local, secret: System.fetch_env!("STOREHOUSE_SECRET")
+        """
+    end
+  end
 
   defp config, do: Application.get_env(:storehouse, __MODULE__, [])
 end

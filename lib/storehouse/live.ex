@@ -33,7 +33,7 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     not take. See the [LiveView](liveview.md) guide.
     """
 
-    import Phoenix.LiveView, only: [cancel_upload: 3, consume_uploaded_entry: 3]
+    import Phoenix.LiveView, only: [allow_upload: 3, cancel_upload: 3, consume_uploaded_entry: 3]
 
     alias Phoenix.LiveView.{Socket, UploadConfig, UploadEntry}
 
@@ -43,14 +43,91 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     @type result :: {UploadEntry.t(), {:ok, Storehouse.File.t()} | {:error, term()}}
 
     @doc """
+    Allows an upload (`Phoenix.LiveView.allow_upload/3`) whose files go
+    straight from the browser to the store, when the store signs uploads
+    (`Storehouse.S3`, `Storehouse.Local`): a large file never goes through
+    the LiveView. With another store, or `direct: false`, the files come
+    to the LiveView, as a plain upload. Either way, `consume/3` checks and
+    keeps them.
+
+        socket
+        |> Storehouse.Live.allow(:photos,
+          accept: ~w(.png .jpg .jpeg .gif .webp),
+          max_file_size: 50_000_000,
+          auto_upload: true,
+          progress: &handle_progress/3
+        )
+
+    The browser needs Storehouse's uploader, in `app.js`:
+
+        import {Uploaders} from "storehouse"
+        let liveSocket = new LiveSocket("/live", Socket, {uploaders: Uploaders, ...})
+
+    ## Options
+
+    The options of `Phoenix.LiveView.allow_upload/3` (but `:external`),
+    and:
+
+      * `:direct` - `false` for a plain upload. The default is `true`,
+        when the store signs uploads.
+      * `:adapter` - the store. The default is `Storehouse.adapter/0`;
+        give the same to `consume/3`.
+      * `:key` - a function of the name and the claimed type that gives
+        the key, as for `Storehouse.store/2`.
+      * `:expires_in` - how long the browser has to start each upload, in
+        seconds. The default is 600.
+    """
+    @spec allow(Socket.t(), atom() | String.t(), keyword()) :: Socket.t()
+    def allow(%Socket{} = socket, upload_name, opts) do
+      {own, upload} = Keyword.split(opts, [:direct, :adapter, :key, :expires_in])
+      adapter = Keyword.get_lazy(own, :adapter, &Storehouse.adapter/0)
+
+      if Keyword.get(own, :direct, true) and Storehouse.supports?(adapter, :presign_upload, 3) do
+        presign = Keyword.take(own, [:adapter, :key, :expires_in])
+
+        allow_upload(
+          socket,
+          upload_name,
+          Keyword.put(upload, :external, &presign(&1, &2, presign))
+        )
+      else
+        allow_upload(socket, upload_name, upload)
+      end
+    end
+
+    defp presign(entry, socket, opts) do
+      case Storehouse.presign_upload(
+             entry.client_name,
+             entry.client_type,
+             entry.client_size,
+             opts
+           ) do
+        {:ok, upload} ->
+          {:ok,
+           %{
+             uploader: "Storehouse",
+             key: upload.key,
+             method: upload.method,
+             url: upload.url,
+             headers: upload.headers
+           }, socket}
+
+        {:error, reason} ->
+          {:error, %{reason: reason}, socket}
+      end
+    end
+
+    @doc """
     Stores the finished entries of `upload_name`, and cancels those the
     upload refused. Gives the socket and a result for each of them, in the
     entries' order.
 
       * An entry that is done is consumed and stored with
-        `Storehouse.store/2` (its name and claimed type are the client's):
-        `{:ok, file}`, or `{:error, reason}` when the check or the store
-        refuses it.
+        `Storehouse.store/2` (its name and claimed type are the client's),
+        or, sent straight to the store (`allow/3`), checked there with
+        `Storehouse.verify_upload/2`: `{:ok, file}`, or `{:error, reason}`
+        when the check or the store refuses it (and a file refused there
+        is deleted).
       * An entry with an error (too large, a type that is not accepted, too
         many files) is cancelled: `{:error, reason}`, the upload's
         (`:too_large`, `:not_accepted`, `:too_many_files`, …).
@@ -112,6 +189,12 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     # result says what happened.
     defp store(%{path: path}, entry, opts) do
       Storehouse.store(path, [name: entry.client_name, content_type: entry.client_type] ++ opts)
+    end
+
+    # A file the browser sent straight to the store (`allow/3`): checked
+    # there, by its first bytes.
+    defp store(%{uploader: "Storehouse", key: key}, entry, opts) do
+      Storehouse.verify_upload(key, [name: entry.client_name] ++ Keyword.drop(opts, [:key]))
     end
   end
 end

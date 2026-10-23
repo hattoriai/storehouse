@@ -1,6 +1,7 @@
 defmodule Storehouse.Local.Plug do
   @moduledoc """
-  Serves the files of `Storehouse.Local`, read only.
+  Serves the files of `Storehouse.Local`, and takes the ones a browser
+  uploads straight to it, when the store signed the upload.
 
   In the endpoint, before the router:
 
@@ -20,6 +21,19 @@ defmodule Storehouse.Local.Plug do
     * `:root` - the directory. The default is the configured `:root`.
     * `:max_age` - the `max-age` of the `Cache-Control` header, in seconds.
       The default is `3600`.
+    * `:private` - when `true`, a file is served only at a URL the store
+      signed (`Storehouse.signed_url/2`), until it expires. The default is
+      `false`: every file is served, and a signed URL as well.
+
+  ## Uploads
+
+  A `PUT` of a file at a URL the store signed (`Storehouse.presign_upload/4`)
+  writes it under its key: of the signed type (its `Content-Type`), of the
+  signed size exactly, before the signature expires, and only where no
+  file is. The answer is `200`; `403` for a signature that is not the
+  store's or has expired, `409` for a key that has a file, `400` for a
+  body of another size or type. Put the plug before `Plug.Parsers`, which
+  would read the body first.
 
   ## Responses
 
@@ -52,15 +66,16 @@ defmodule Storehouse.Local.Plug do
   alias Storehouse.{Check, Local}
 
   @impl Plug
-  def init(opts), do: Keyword.validate!(opts, [:at, :root, max_age: 3600])
+  def init(opts), do: Keyword.validate!(opts, [:at, :root, max_age: 3600, private: false])
 
   @impl Plug
-  def call(%Plug.Conn{method: method} = conn, opts) when method in ["GET", "HEAD"] do
+  def call(%Plug.Conn{method: method} = conn, opts) when method in ["GET", "HEAD", "PUT"] do
     at = split(Keyword.get_lazy(opts, :at, &Local.url_prefix/0))
 
     case strip(conn.path_info, at) do
       nil -> conn
-      segments -> serve(conn, segments, opts)
+      segments when method == "PUT" -> upload(fetch_query_params(conn), segments, opts)
+      segments -> serve(fetch_query_params(conn), segments, opts)
     end
   end
 
@@ -75,15 +90,109 @@ defmodule Storehouse.Local.Plug do
   defp serve(conn, [], _opts), do: halt_with(conn, 404)
 
   defp serve(conn, segments, opts) do
-    if Enum.all?(segments, &Storehouse.valid_segment?/1) do
-      root = opts |> Keyword.get_lazy(:root, &Local.root/0) |> Path.expand()
-
-      case regular_file(root, segments) do
-        {:ok, path, size} -> send_regular_file(conn, path, size, opts)
-        :error -> halt_with(conn, 404)
-      end
+    with true <- Enum.all?(segments, &Storehouse.valid_segment?/1) || 400,
+         {:ok, disposition} <- signed_get(conn, Enum.join(segments, "/"), opts[:private]),
+         root = opts |> Keyword.get_lazy(:root, &Local.root/0) |> Path.expand(),
+         {:ok, path, size} <- regular_file(root, segments) || 404 do
+      send_regular_file(conn, path, size, disposition, opts)
     else
-      halt_with(conn, 400)
+      status when is_integer(status) -> halt_with(conn, status)
+    end
+  end
+
+  # A URL the store signed: its disposition, or the type's. With no
+  # signature, a file of a store that is not private.
+  defp signed_get(%{query_params: %{"signature" => signature} = params}, key, _private) do
+    disposition = Map.get(params, "disposition", "")
+
+    if Local.signed?(["GET", key, params["expires"], disposition], params["expires"], signature),
+      do: {:ok, if(disposition == "", do: nil, else: disposition)},
+      else: 403
+  end
+
+  defp signed_get(_conn, _key, true), do: 403
+  defp signed_get(_conn, _key, _private), do: {:ok, nil}
+
+  defp upload(conn, segments, opts) do
+    key = Enum.join(segments, "/")
+    params = conn.query_params
+    type = params["type"]
+
+    with true <- Enum.all?(segments, &Storehouse.valid_segment?/1) || 400,
+         true <-
+           Local.signed?(
+             ["PUT", key, params["expires"], type, params["bytes"]],
+             params["expires"],
+             params["signature"]
+           ) ||
+             403,
+         {bytes, ""} <- Integer.parse(params["bytes"]),
+         true <- content_type(conn) == type || 400,
+         root = opts |> Keyword.get_lazy(:root, &Local.root/0) |> Path.expand(),
+         {:ok, path} <- Local.path(key),
+         true <- String.starts_with?(path, root <> "/") || 400,
+         false <- File.exists?(path) && 409,
+         :ok <- File.mkdir_p(Path.dirname(path)),
+         {:ok, conn} <- receive_file(conn, path, bytes) do
+      conn |> send_resp(200, "") |> halt()
+    else
+      status when is_integer(status) -> halt_with(conn, status)
+      {:error, conn, status} -> halt_with(conn, status)
+      _other -> halt_with(conn, 400)
+    end
+  end
+
+  defp content_type(conn) do
+    case get_req_header(conn, "content-type") do
+      [type | _rest] -> type |> String.split(";") |> hd() |> String.trim() |> String.downcase()
+      [] -> nil
+    end
+  end
+
+  # The body, to a file beside the key's, then in its place: of `bytes`
+  # bytes exactly.
+  defp receive_file(conn, path, bytes) do
+    part = path <> ".part-" <> Integer.to_string(System.unique_integer([:positive]))
+
+    case File.open(part, [:write, :binary], &read_into(conn, &1, bytes, 0)) do
+      {:ok, {:ok, conn, ^bytes}} ->
+        case File.rename(part, path) do
+          :ok -> {:ok, conn}
+          {:error, _reason} -> discard(part, conn, 500)
+        end
+
+      {:ok, {:ok, conn, _other}} ->
+        discard(part, conn, 400)
+
+      {:ok, {:error, conn}} ->
+        discard(part, conn, 400)
+
+      {:error, _reason} ->
+        {:error, conn, 500}
+    end
+  end
+
+  defp discard(part, conn, status) do
+    File.rm(part)
+    {:error, conn, status}
+  end
+
+  defp write_chunk(conn, file, chunk, state, bytes, size) do
+    :ok = IO.binwrite(file, chunk)
+    if state == :ok, do: {:ok, conn, size}, else: read_into(conn, file, bytes, size)
+  end
+
+  defp read_into(conn, file, bytes, size) do
+    case read_body(conn, length: 1_000_000, read_length: 1_000_000) do
+      {state, chunk, conn} when state in [:ok, :more] ->
+        size = size + byte_size(chunk)
+
+        if size > bytes,
+          do: {:error, conn},
+          else: write_chunk(conn, file, chunk, state, bytes, size)
+
+      {:error, _reason} ->
+        {:error, conn}
     end
   end
 
@@ -107,11 +216,11 @@ defmodule Storehouse.Local.Plug do
          {:ok, %File.Stat{type: :regular, size: size}} <- File.lstat(path) do
       {:ok, path, size}
     else
-      _other -> :error
+      _other -> nil
     end
   end
 
-  defp send_regular_file(conn, path, size, opts) do
+  defp send_regular_file(conn, path, size, disposition, opts) do
     type = Check.content_type(Path.extname(path))
 
     conn
@@ -119,7 +228,7 @@ defmodule Storehouse.Local.Plug do
     |> put_resp_header("cache-control", "private, max-age=#{opts[:max_age]}")
     |> put_resp_header("x-content-type-options", "nosniff")
     |> put_resp_header("content-security-policy", "default-src 'none'; sandbox")
-    |> put_resp_header("content-disposition", disposition(type))
+    |> put_resp_header("content-disposition", disposition(type, disposition))
     |> put_resp_header("accept-ranges", "bytes")
     |> send_body(path, size)
     |> halt()
@@ -172,7 +281,15 @@ defmodule Storehouse.Local.Plug do
     end
   end
 
-  defp disposition(type), do: if(Check.inline?(type), do: "inline", else: "attachment")
+  # The type's, or a signed URL's: a download with its name, or inline for
+  # a type a browser shows, and never inline for another.
+  defp disposition(type, nil), do: if(Check.inline?(type), do: "inline", else: "attachment")
+
+  defp disposition(type, "inline" <> rest) do
+    if Check.inline?(type), do: "inline" <> rest, else: "attachment" <> rest
+  end
+
+  defp disposition(_type, signed), do: signed
 
   defp halt_with(conn, status), do: conn |> send_resp(status, "") |> halt()
 end

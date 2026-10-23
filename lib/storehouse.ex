@@ -168,6 +168,156 @@ defmodule Storehouse do
   end
 
   @doc """
+  Signs an upload that a browser makes straight to the store, without the
+  file going through the app: of the file `name`, of the claimed type
+  `claim` and of `bytes` bytes exactly. Gives the file's new `key` and the
+  request to make (`method`, `url`, `headers`). `Storehouse.Live.allow/3`
+  does this for a LiveView upload.
+
+  The key's extension is the claimed type's, as the checked type it would
+  be (`Storehouse.Check.claimed/1`). When the file is there, check it
+  with `verify_upload/2`: until then, it is what the browser said it is.
+
+  ## Options
+
+    * `:accept` - the types to take: a claim of another gives
+      `{:error, :not_accepted}` at once.
+    * `:max_bytes` - a larger file gives `{:error, :too_large}` at once.
+    * `:expires_in` - how long the browser has to start the upload, in
+      seconds. The default is 600.
+    * `:adapter` and `:key`, as for `store/2`. The adapter must sign
+      uploads (`c:Storehouse.Adapter.presign_upload/3`): `Storehouse.Local`
+      and `Storehouse.S3` do; another gives `{:error, :not_supported}`.
+  """
+  @spec presign_upload(String.t(), String.t() | nil, non_neg_integer(), keyword()) ::
+          {:ok,
+           %{key: Storehouse.Adapter.key(), method: String.t(), url: String.t(), headers: map()}}
+          | {:error, term()}
+  def presign_upload(name, claim, bytes, opts \\ []) when is_integer(bytes) and bytes >= 0 do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+    type = Check.claimed(claim)
+    name = clean_name(name)
+
+    with :ok <- supported(adapter, :presign_upload, 3),
+         :ok <- accepted(type, Keyword.get(opts, :accept)),
+         :ok <-
+           if(is_integer(opts[:max_bytes]) and bytes > opts[:max_bytes],
+             do: {:error, :too_large},
+             else: :ok
+           ),
+         {:ok, key} <- new_key(Keyword.get(opts, :key, &key/2), name, type),
+         {:ok, upload} <-
+           adapter.presign_upload(key, %{name: name, content_type: type, bytes: bytes},
+             expires_in: Keyword.get(opts, :expires_in, 600)
+           ) do
+      {:ok, Map.put(upload, :key, key)}
+    end
+  end
+
+  @doc """
+  Checks a file a browser uploaded straight to the store
+  (`presign_upload/4`), by its first bytes, and gives it as `store/2`
+  does. A file whose bytes are not of the type it was signed for (a page
+  sent as a PNG), of a type `:accept` refuses, or over a limit, is
+  deleted, and gives `{:error, :not_accepted}` or `{:error, :too_large}`.
+
+  ## Options
+
+    * `:name` - the file's name, for display. The default is the key's.
+    * `:accept`, `:max_bytes`, `:max_pixels`, `:adapter`, as for
+      `store/2`.
+    * `:preview` - as for `store/2`, with `nil` for the path: the file is
+      not here.
+  """
+  @spec verify_upload(Storehouse.Adapter.key(), keyword()) ::
+          {:ok, Storehouse.File.t()} | {:error, term()}
+  def verify_upload(key, opts \\ []) do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+    signed = Check.content_type(Path.extname(key))
+
+    with true <- valid_key?(key) || {:error, :invalid_key},
+         :ok <- supported(adapter, :read_head, 2),
+         {:ok, head, size} <- adapter.read_head(key, Check.head_size()),
+         {:ok, description} <-
+           checked(Check.describe_head(head, size, signed, opts), signed, opts, adapter, key) do
+      file = %Storehouse.File{
+        key: key,
+        url: adapter.url(key),
+        name: clean_name(Keyword.get(opts, :name, Path.basename(key))),
+        content_type: signed,
+        bytes: description.bytes,
+        width: description.width,
+        height: description.height
+      }
+
+      {:ok, preview(file, nil, Keyword.get(opts, :preview))}
+    end
+  end
+
+  # The bytes are of the type the upload was signed for (any, for a
+  # download), and of one taken: else the file goes.
+  defp checked({:ok, %{content_type: type} = description}, signed, opts, adapter, key) do
+    cond do
+      signed != "application/octet-stream" and type != signed ->
+        discard(adapter, key, {:error, :not_accepted})
+
+      accepted(signed, Keyword.get(opts, :accept)) != :ok ->
+        discard(adapter, key, {:error, :not_accepted})
+
+      true ->
+        {:ok, description}
+    end
+  end
+
+  defp checked({:error, _reason} = error, _signed, _opts, adapter, key),
+    do: discard(adapter, key, error)
+
+  @doc """
+  A URL of a file that is valid for a while, for a file that is not
+  public: a bucket that is private, a local store whose plug serves only
+  signed URLs (`private: true`). Keep the key, not this URL: it expires.
+  `Storehouse.Redirect` gives a lasting URL of your app that redirects to
+  a fresh one.
+
+  ## Options
+
+    * `:expires_in` - in seconds. The default is 300.
+    * `:disposition` - `"inline"` or `"attachment"` (a download).
+    * `:filename` - the name of the download.
+    * `:adapter` - as for `store/2`. The adapter must sign URLs
+      (`c:Storehouse.Adapter.signed_url/2`): `Storehouse.Local` and
+      `Storehouse.S3` do; another gives `{:error, :not_supported}`.
+  """
+  @spec signed_url(Storehouse.Adapter.key() | Storehouse.File.t(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def signed_url(key_or_file, opts \\ [])
+  def signed_url(%Storehouse.File{key: key}, opts), do: signed_url(key, opts)
+
+  def signed_url(key, opts) when is_binary(key) do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+
+    with :ok <- supported(adapter, :signed_url, 2),
+         true <- valid_key?(key) || {:error, :invalid_key} do
+      adapter.signed_url(
+        key,
+        Keyword.merge(
+          [expires_in: 300],
+          Keyword.take(opts, [:expires_in, :disposition, :filename])
+        )
+      )
+    end
+  end
+
+  defp supported(adapter, function, arity) do
+    if Code.ensure_loaded?(adapter) and function_exported?(adapter, function, arity),
+      do: :ok,
+      else: {:error, :not_supported}
+  end
+
+  @doc false
+  def supports?(adapter, function, arity), do: supported(adapter, function, arity) == :ok
+
+  @doc """
   Downloads the file at `url`, from a host of `:hosts`, then checks and
   stores it as `store/2` does: an image pasted by its address, a file an
   agent names.

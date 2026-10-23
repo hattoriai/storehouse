@@ -28,8 +28,19 @@ jobs:
           restore-keys: |
             mix-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
 
+      # A store that speaks S3's API, for Storehouse.S3's tests (as
+      # LocalStack or MinIO would be).
+      - name: moto, on port 4566
+        run: |
+          pipx install "moto[server]"
+          nohup moto_server -p 4566 > /tmp/moto.log 2>&1 &
+          for i in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:4566/ && exit 0; sleep 1; done
+          cat /tmp/moto.log; exit 1
+
       - run: mix deps.get
       - run: mix compile --warnings-as-errors
       - run: mix format --check-formatted
       - run: mix credo --strict
       - run: mix test
+        env:
+          S3_ENDPOINT: http://127.0.0.1:4566

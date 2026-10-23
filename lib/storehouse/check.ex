@@ -144,16 +144,54 @@ defmodule Storehouse.Check do
     with {:ok, %File.Stat{size: bytes}} <- File.stat(path),
          :ok <- at_most(bytes, opts[:max_bytes]),
          {:ok, head} <- read_head(path) do
-      {content_type, width, height} =
-        case image(head) do
-          {type, width, height} -> {type, width, height}
-          nil -> {other_type(head, claim(claim)), nil, nil}
-        end
-
-      with :ok <- at_most(width && height && width * height, opts[:max_pixels]) do
-        {:ok, %{content_type: content_type, bytes: bytes, width: width, height: height}}
-      end
+      describe_head(head, bytes, claim, opts)
     end
+  end
+
+  @doc """
+  As `describe/3`, of the start of a file (`head`, its first
+  #{div(@head, 1024)} KB or all of it, as `head_size/0` says) and its size in
+  `bytes`: a file that is in a store and not here, uploaded straight to
+  it.
+  """
+  @spec describe_head(binary(), non_neg_integer(), String.t() | nil, keyword()) ::
+          {:ok, description()} | {:error, term()}
+  def describe_head(head, bytes, claim \\ nil, opts \\ []) when is_binary(head) do
+    {content_type, width, height} =
+      case image(head) do
+        {type, width, height} -> {type, width, height}
+        nil -> {other_type(head, claim(claim)), nil, nil}
+      end
+
+    with :ok <- at_most(bytes, opts[:max_bytes]),
+         :ok <- at_most(width && height && width * height, opts[:max_pixels]) do
+      {:ok, %{content_type: content_type, bytes: bytes, width: width, height: height}}
+    end
+  end
+
+  @doc "How much of the start of a file `describe_head/4` reads, in bytes."
+  @spec head_size() :: pos_integer()
+  def head_size, do: @head
+
+  @doc """
+  The type a browser claims for a file, as the checked type it would be
+  if its bytes prove it: a type of the allow-list, else
+  `application/octet-stream`. A file uploaded straight to a store is
+  stored as this type, and refused when its bytes say otherwise.
+
+  ## Examples
+
+      iex> Storehouse.Check.claimed("image/PNG")
+      "image/png"
+
+      iex> Storehouse.Check.claimed("text/html")
+      "application/octet-stream"
+
+  """
+  @spec claimed(String.t() | nil) :: String.t()
+  def claimed(claim) do
+    type = claim(claim)
+    if Map.has_key?(@extensions, type), do: type, else: @octet
   end
 
   defp at_most(n, max) when is_integer(n) and is_integer(max) and n > max,

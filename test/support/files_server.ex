@@ -48,3 +48,15 @@ defmodule StorehouseTest.FilesServer do
     port
   end
 end
+
+defmodule StorehouseTest.PlainStore do
+  @moduledoc "A store with the three callbacks only: no signed uploads or URLs."
+  @behaviour Storehouse.Adapter
+
+  @impl true
+  def put(key, _path, _meta), do: {:ok, url(key)}
+  @impl true
+  def url(key), do: "/plain/" <> key
+  @impl true
+  def delete(_key), do: :ok
+end

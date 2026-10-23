@@ -1,8 +1,8 @@
 # Stores
 
 A store keeps the files: `Storehouse.Local` (the local disk, the
-default), or an adapter of your own (`Storehouse.Adapter`) for S3,
-another object store or a database.
+default), `Storehouse.S3` (S3 and the stores that speak its API), or an
+adapter of your own (`Storehouse.Adapter`).
 
 ## The local disk
 
@@ -30,17 +30,109 @@ so outside the block it would replace the development root.
 
 Serve the files with `Storehouse.Local.Plug` (see [Serving](serving.md)).
 
+## S3, and the stores that speak its API
+
+`Storehouse.S3` keeps the files in a bucket of Amazon S3, or of a store
+with its API: Cloudflare R2, MinIO, Tigris, Backblaze B2, DigitalOcean
+Spaces, Google Cloud Storage's interoperability. It needs no other
+library: it signs its requests itself.
+
+```elixir
+# config/runtime.exs
+if config_env() == :prod do
+  config :storehouse, adapter: Storehouse.S3
+
+  config :storehouse, Storehouse.S3,
+    bucket: "my-app-uploads",
+    region: "eu-west-1",
+    access_key_id: System.fetch_env!("AWS_ACCESS_KEY_ID"),
+    secret_access_key: System.fetch_env!("AWS_SECRET_ACCESS_KEY")
+end
+```
+
+Another store: its `endpoint`, whose URLs name the bucket in their path
+(`path_style`, the default with an endpoint), and the `public_url` of its
+files when it serves them from a domain of yours or a CDN:
+
+```elixir
+config :storehouse, Storehouse.S3,
+  bucket: "uploads",
+  region: "auto",
+  endpoint: "https://<account>.r2.cloudflarestorage.com",
+  access_key_id: System.fetch_env!("R2_ACCESS_KEY_ID"),
+  secret_access_key: System.fetch_env!("R2_SECRET_ACCESS_KEY"),
+  public_url: "https://files.example.com"
+```
+
+A file's `url` is its public URL: of a public bucket, or of `public_url`.
+A private bucket serves its files at signed URLs (see
+[Private files](private_files.md)).
+
+## In development
+
+Two ways, as you like it.
+
+**The local disk**, with nothing else to run: `Storehouse.Local` in
+`config/dev.exs`, its plug in the endpoint, and a secret for direct
+uploads and signed URLs. The browser uploads straight to the plug as it
+would to a bucket, so the LiveView is the same in development and in
+production.
+
+```elixir
+# config/dev.exs
+config :storehouse, adapter: Storehouse.Local
+
+config :storehouse, Storehouse.Local,
+  root: Path.expand("../tmp/uploads", __DIR__),
+  secret: "a development secret of at least 32 bytes"
+```
+
+**LocalStack** (or MinIO), S3 on your machine: `Storehouse.S3`, with its
+endpoint and any keys.
+
+```elixir
+# config/dev.exs
+config :storehouse, adapter: Storehouse.S3
+
+config :storehouse, Storehouse.S3,
+  bucket: "uploads",
+  region: "us-east-1",
+  endpoint: "http://localhost:4566",
+  access_key_id: "test",
+  secret_access_key: "test"
+```
+
+```sh
+awslocal s3 mb s3://uploads
+awslocal s3api put-bucket-cors --bucket uploads --cors-configuration file://cors.json
+```
+
+with the CORS rule of [Direct uploads](direct_uploads.md), for the
+origin of your development server (`http://localhost:4000`).
+
+In tests, the local disk, in a directory of the test's own:
+
+```elixir
+# config/test.exs
+config :storehouse, Storehouse.Local,
+  root: Path.expand("../tmp/test-uploads", __DIR__),
+  secret: "a test secret of at least 32 bytes"
+```
+
 ## Another store
 
 Write a module with the three callbacks of `Storehouse.Adapter`
-(`put/3`, `url/1` and `delete/1`) and name it in the config:
+(`put/3`, `url/1` and `delete/1`), and the optional ones for direct
+uploads and signed URLs (`presign_upload/3`, `read_head/2`,
+`signed_url/2`), and name it in the config:
 
 ```elixir
 config :storehouse, adapter: MyApp.Storage
 ```
 
 or give it per call: `Storehouse.store(path, adapter: MyApp.Storage)`.
-The `Storehouse.Adapter` docs have a full example for S3.
+The `Storehouse.Adapter` docs have an example on `ExAws.S3`, for an app
+that has it already.
 
 Two rules for an adapter:
 
@@ -53,10 +145,6 @@ Two rules for an adapter:
   Give a public or CDN URL, or a path of your app (for example
   `"/files/" <> key`) whose controller checks access and redirects to a
   short-lived signed URL.
-
-An adapter written for Kotoba (`Kotoba.Storage`) or Hakushi
-(`Hakushi.Storage`) has these same callbacks, and is a Storehouse adapter
-as it is.
 
 ## Keys
 

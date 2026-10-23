@@ -77,8 +77,7 @@ store's own.
 
 ## Direct uploads
 
-LiveView's `external:` uploads (the browser sends the file straight to a
-cloud store) are not supported yet: the file comes to the LiveView first,
-so that Storehouse reads its bytes, and the adapter then sends it on.
-Uploads straight to the store, checked when they land, are on the
-roadmap.
+`Storehouse.Live.allow/3`, in place of `allow_upload/3`, sends the files
+straight from the browser to the store, when the store takes direct
+uploads (`Storehouse.S3`, and `Storehouse.Local` in development):
+`consume/3` checks them there. See [Direct uploads](direct_uploads.md).
