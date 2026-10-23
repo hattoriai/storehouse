@@ -16,6 +16,12 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   and ZIP64 past 4 GB or 65,535 files. `size/2` gives its exact size
   before it is made. Names that could leave the folder are refused, and
   a stored file whose size changed stops the zip.
+- Files that expire: `store/2`'s `:expires_in` keeps a file under an
+  expiring key (`Storehouse.expiring_key/2`: the prefix
+  `Storehouse.expiring_prefix/0`, the days it is kept, when it expires),
+  for a bucket's lifecycle rule of that many days; `Storehouse.Sweeper`
+  deletes them on stores with none, `Storehouse.expires_at/1` says when,
+  and `signed_url/2` never signs past it (`{:error, :expired}` after).
 - Reprocessing: `Storehouse.Ecto.reprocess/5` runs analysis steps over
   the files of a field in every record a query gives, a batch at a time
   in the order of the primary key, skipping files that have every step's

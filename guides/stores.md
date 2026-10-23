@@ -420,6 +420,39 @@ entries = [
 `Storehouse.Zip.stream/2` gives the same zip as a stream, for a response
 sent in chunks. A name is a path in the zip, never outside it: `..`, a
 leading `/` and a backslash are refused.
+## Files that expire
+
+An export whose link is emailed for a day, a PDF to download for a
+week, a report a job made: `expires_in:` stores a file that is deleted
+after its time.
+
+```elixir
+{:ok, file} = Storehouse.store(path, expires_in: 7 * 86_400, owner: account.id)
+
+Storehouse.expires_at(file)
+#=> ~U[2026-10-30 12:00:00Z]
+
+# Its link never outlives it; once it expired, there is none.
+{:ok, url} = Storehouse.signed_url(file, expires_in: 30 * 86_400)
+```
+
+Its key is under `"expiring/"`, then the days it is kept, then when it
+expires (`Storehouse.expiring_key/2`): `"expiring/7d/1792843200/42/…"`.
+On S3, give the bucket one lifecycle rule for each number of days you
+use, on its prefix:
+
+```json
+{"Rules": [
+  {"ID": "storehouse-expiring-1d", "Status": "Enabled", "Filter": {"Prefix": "expiring/1d/"}, "Expiration": {"Days": 1}},
+  {"ID": "storehouse-expiring-7d", "Status": "Enabled", "Filter": {"Prefix": "expiring/7d/"}, "Expiration": {"Days": 7}}
+]}
+```
+
+On the local disk, and a store with no lifecycle rules, `Storehouse.Sweeper`
+deletes them once their time has come.
+
+A file made in the store as a stream takes an expiring key too:
+`Storehouse.expiring_key("exports/42.zip", 86_400)`.
 
 ## Files from an address
 

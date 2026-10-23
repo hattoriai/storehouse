@@ -91,6 +91,9 @@ It gives your app:
 * **the same file again** is the one you have: found by its checksum
   before it is uploaded (and the upload signed with it, so the store
   takes only those bytes), or when it is verified, for two at once;
+* **files that expire**: an export, a report, a PDF to download for a
+  week, deleted after its time by a bucket's lifecycle rule or the
+  sweeper, its signed links never outliving it;
 * **cleanup**: files listed and deleted by prefix (an account's, a
   thousand at a time on S3), deletions tried again until the store
   answers, and temporary files of forms never saved swept
