@@ -105,10 +105,11 @@ Errors are codes, for the frontend to say in its own words:
 
 ## The JavaScript client
 
-`storehouse/client` (in the `storehouse` npm package, beside the LiveView
+`storehouse/client` (`@hattoriai/storehouse/client` from npm, beside the LiveView
 uploader) does the browser's part, with no dependencies:
 
 ```javascript
+// In a Phoenix app; from npm, "@hattoriai/storehouse/client".
 import {createUploadQueue} from "storehouse/client"
 
 const queue = createUploadQueue({

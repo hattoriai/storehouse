@@ -1,9 +1,11 @@
 name: npm
 
-# Publishes the JavaScript of Storehouse (the LiveView uploader, and the
-# upload client once it is there) to npm as @hattoriai/storehouse, when a
-# release is published. Needs the repository secret NPM_TOKEN: an npm
-# automation token that may publish @hattoriai/storehouse.
+# Publishes the JavaScript of Storehouse (the LiveView uploader and the
+# upload client) to npm as @hattoriai/storehouse, when a release is
+# published. By npm's trusted publishing: no token, npm trusts this
+# workflow of this repository (the package's Settings → Trusted Publisher
+# on npmjs.com, with the environment below), and the package says which
+# run built it (provenance).
 
 on:
   release:
@@ -13,17 +15,22 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Its required reviewers approve each release before it is published.
+    environment: npm
     permissions:
       contents: read
-      # npm's provenance: the package says which workflow built it.
+      # The run's OIDC identity, which npm checks in place of a token.
       id-token: write
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
+
+      # Trusted publishing takes npm 11.5.1 or later.
+      - run: npm install --global npm@latest
 
       # The release's tag, package.json and mix.exs name one version.
       - name: one version
@@ -34,6 +41,12 @@ jobs:
           echo "tag $tag, package.json $npm_version, mix.exs $mix_version"
           test "$tag" = "$npm_version" && test "$tag" = "$mix_version"
 
-      - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # A version on npm already (published by hand) is left as it is.
+      - name: publish
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          if npm view "@hattoriai/storehouse@$version" version > /dev/null 2>&1; then
+            echo "@hattoriai/storehouse@$version is on npm already"
+          else
+            npm publish --access public
+          fi
