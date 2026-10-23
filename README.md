@@ -14,8 +14,10 @@ your app.
 
 > **Status: early release.** Checking, storing, the local disk and S3
 > (and the stores that speak its API), uploads straight to the store,
-> signed URLs for private files, checksums, telemetry, files from an
-> address, and LiveView uploads are here. Before 1.0,
+> uploads streamed through the app with no temporary file, files in
+> Ecto records (temporary until saved, permanent then), signed URLs for
+> private files, checksums, telemetry, files from an address, and
+> LiveView uploads are here. Before 1.0,
 > a minor version may change the API; see the roadmap for what comes
 > next.
 
@@ -50,6 +52,15 @@ It gives your app:
   large file never goes through your app, and Storehouse checks it there
   by its first bytes; in development, to your app's own plug, the same
   way;
+* **uploads streamed through your app** with no file on its disk: to S3
+  in the parts of a multipart upload as the chunks come, checked by their
+  first bytes on the way, two parts in flight from a process of their
+  own, the upload held back when the bucket is slower than the browser;
+* **files in Ecto records**: a column of the file (`Storehouse.Ecto.File`),
+  no table of files; an upload is temporary until its record is saved,
+  made permanent then by a copy in the store, and a bucket's lifecycle
+  rule deletes those of forms never saved; files replaced or removed are
+  deleted once the database has the change;
 * **private files**: signed URLs that expire, from S3 or the local plug,
   and `Storehouse.Redirect`, a lasting URL of your app that checks the
   person and redirects to a fresh one;
@@ -152,19 +163,41 @@ A private file:
 {:ok, url} = Storehouse.signed_url(file.key, expires_in: 300)
 ```
 
+In a record:
+
+```elixir
+schema "users" do
+  field :avatar, Storehouse.Ecto.File
+end
+
+user
+|> User.changeset(attrs)
+|> Storehouse.Ecto.put_file(:avatar, avatar, accept: Storehouse.Check.images(), max_bytes: 5_000_000)
+|> then(&Storehouse.Ecto.update(Repo, &1))
+```
+
 The guides: [Stores](guides/stores.md) (the local disk, S3, LocalStack,
-development), [Direct uploads](guides/direct_uploads.md),
-[Private files](guides/private_files.md), [Serving](guides/serving.md)
-and [LiveView](guides/liveview.md).
+development), [Direct uploads](guides/direct_uploads.md) (and streamed
+ones), [Ecto](guides/ecto.md), [Private files](guides/private_files.md),
+[Serving](guides/serving.md) and [LiveView](guides/liveview.md).
 
 ## Roadmap
 
-* **Cleanup of unused files**: deleted files stay in storage today, and
-  abandoned direct uploads too.
-* **Variants**: images resized and converted on demand and cached. Today
-  the app passes a preview function.
-* **Previews and analysis**: a PDF's first page, a video's poster, length
-  and audio. Storehouse reads image sizes only.
+* **Work after the upload, with no job queue**: versions of an image made
+  when it lands, previews, analysis, in supervised processes of the app
+  (Oban, when the work must outlive a deploy).
+* **Variants**: images resized and converted on demand, and cached, each
+  made once however many ask for it at the same time, across a cluster.
+* **Previews and analysis**: a PDF's first page, a video's poster, its
+  length and size, audio; metadata of the app's own, read again later.
+* **Live progress beyond the upload**: the versions being made, a video
+  being read, for everyone who sees the file (PubSub).
+* **Cleanup of unused files**: deleted files and abandoned uploads, by a
+  supervised process, with no cron.
+* **Resumable uploads** that survive a reconnect (and the tus protocol),
+  and multipart uploads straight from the browser, for very large files.
+* **Endpoints for other clients**: presign and upload endpoints, for Uppy
+  and for apps with no LiveView.
 * **Mirror**: writing to two stores at once, for migrating between them.
 * **Proxy mode**: streaming private bucket files through the app, for a
   CDN in front.

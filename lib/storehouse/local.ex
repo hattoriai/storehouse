@@ -178,6 +178,48 @@ defmodule Storehouse.Local do
   end
 
   @impl Storehouse.Adapter
+  def stream_open(key, _meta) do
+    with {:ok, path} <- path(key),
+         false <- File.exists?(path) && {:error, :eexist},
+         :ok <- File.mkdir_p(Path.dirname(path)),
+         part = path <> ".part-" <> Integer.to_string(System.unique_integer([:positive])),
+         {:ok, io} <- File.open(part, [:write, :binary]) do
+      {:ok, %{key: key, path: path, part: part, io: io}}
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def stream_write(%{io: io} = stream, data) do
+    :ok = IO.binwrite(io, data)
+    {:ok, stream}
+  end
+
+  @impl Storehouse.Adapter
+  def stream_close(%{io: io, part: part, path: path, key: key}) do
+    with :ok <- File.close(io),
+         :ok <- File.rename(part, path) do
+      {:ok, url(key)}
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def stream_abort(%{io: io, part: part}) do
+    _closed = File.close(io)
+    _removed = File.rm(part)
+    :ok
+  end
+
+  @impl Storehouse.Adapter
+  def copy(from, to) do
+    with {:ok, source} <- path(from),
+         {:ok, destination} <- path(to),
+         true <- File.regular?(source) || {:error, :enoent},
+         :ok <- File.mkdir_p(Path.dirname(destination)) do
+      File.cp(source, destination)
+    end
+  end
+
+  @impl Storehouse.Adapter
   def checksum(key) do
     with {:ok, path} <- path(key),
          true <- File.regular?(path) || {:error, :enoent} do

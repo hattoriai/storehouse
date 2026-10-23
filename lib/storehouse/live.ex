@@ -43,12 +43,22 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     @type result :: {UploadEntry.t(), {:ok, Storehouse.File.t()} | {:error, term()}}
 
     @doc """
-    Allows an upload (`Phoenix.LiveView.allow_upload/3`) whose files go
-    straight from the browser to the store, when the store signs uploads
-    (`Storehouse.S3`, `Storehouse.Local`): a large file never goes through
-    the LiveView. With another store, or `direct: false`, the files come
-    to the LiveView, as a plain upload. Either way, `consume/3` checks and
-    keeps them.
+    Allows an upload (`Phoenix.LiveView.allow_upload/3`) whose files go to
+    the store in one of three ways (`:mode`):
+
+      * `:direct` - straight from the browser to the store, at a URL the
+        app signed: a large file never goes through the app. The default,
+        for a store that signs uploads (`Storehouse.S3`, and
+        `Storehouse.Local` in development). The browser needs Storehouse's
+        uploader (below).
+      * `:stream` - through the app, on to the store as each chunk comes
+        (`Storehouse.Live.Writer`): with no file on the app's disk, checked
+        as it comes, and with no CORS, as the browser sends it to the app.
+      * `:server` - a plain upload: to a temporary file on the app's disk,
+        then to the store (`consume/3`). The default for a store that takes
+        neither.
+
+    Either way, `consume/3` gives the stored, checked files.
 
         socket
         |> Storehouse.Live.allow(:photos,
@@ -58,42 +68,71 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
           progress: &handle_progress/3
         )
 
-    The browser needs Storehouse's uploader, in `app.js`:
+    With `:direct`, the browser needs Storehouse's uploader, in `app.js`:
 
         import {Uploaders} from "storehouse"
         let liveSocket = new LiveSocket("/live", Socket, {uploaders: Uploaders, ...})
 
     ## Options
 
-    The options of `Phoenix.LiveView.allow_upload/3` (but `:external`),
-    and:
+    The options of `Phoenix.LiveView.allow_upload/3` (but `:external` and
+    `:writer`), and:
 
-      * `:direct` - `false` for a plain upload. The default is `true`,
-        when the store signs uploads.
+      * `:mode` - `:direct`, `:stream` or `:server`, as above.
       * `:adapter` - the store. The default is `Storehouse.adapter/0`;
         give the same to `consume/3`.
+      * `:cache` - `true` stores the files under the temporary prefix, until
+        the record that has them is saved (`Storehouse.Ecto`).
       * `:key` - a function of the name and the claimed type that gives
         the key, as for `Storehouse.store/2`.
-      * `:expires_in` - how long the browser has to start each upload, in
-        seconds. The default is 600.
+      * `:types`, `:max_pixels` - with `:stream`, the checked types taken
+        and the pixels at most, checked as the file comes. (With the other
+        modes, give `consume/3` its `:accept` and `:max_pixels`.)
+      * `:expires_in` - with `:direct`, how long the browser has to start
+        each upload, in seconds. The default is 600.
     """
     @spec allow(Socket.t(), atom() | String.t(), keyword()) :: Socket.t()
     def allow(%Socket{} = socket, upload_name, opts) do
-      {own, upload} = Keyword.split(opts, [:direct, :adapter, :key, :expires_in])
+      {own, upload} =
+        Keyword.split(opts, [:mode, :adapter, :key, :cache, :expires_in, :types, :max_pixels])
+
       adapter = Keyword.get_lazy(own, :adapter, &Storehouse.adapter/0)
 
-      if Keyword.get(own, :direct, true) and Storehouse.supports?(adapter, :presign_upload, 3) do
-        presign = Keyword.take(own, [:adapter, :key, :expires_in])
+      case Keyword.get_lazy(own, :mode, fn -> default_mode(adapter) end) do
+        :direct ->
+          presign = Keyword.take(own, [:adapter, :key, :cache, :expires_in])
 
-        allow_upload(
-          socket,
-          upload_name,
-          Keyword.put(upload, :external, &presign(&1, &2, presign))
-        )
-      else
-        allow_upload(socket, upload_name, upload)
+          allow_upload(
+            socket,
+            upload_name,
+            Keyword.put(upload, :external, &presign(&1, &2, presign))
+          )
+
+        :stream ->
+          writer =
+            own
+            |> Keyword.take([:adapter, :key, :cache, :max_pixels])
+            |> Keyword.put(:accept, own[:types])
+
+          allow_upload(
+            socket,
+            upload_name,
+            Keyword.put(upload, :writer, fn _name, entry, _socket ->
+              {Storehouse.Live.Writer, Keyword.put(writer, :entry, entry)}
+            end)
+          )
+
+        :server ->
+          allow_upload(socket, upload_name, upload)
+
+        other ->
+          raise ArgumentError,
+                "Storehouse.Live.allow/3: mode: is :direct, :stream or :server, got: #{inspect(other)}"
       end
     end
+
+    defp default_mode(adapter),
+      do: if(Storehouse.supports?(adapter, :presign_upload, 3), do: :direct, else: :server)
 
     defp presign(entry, socket, opts) do
       case Storehouse.presign_upload(
@@ -190,6 +229,10 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     defp store(%{path: path}, entry, opts) do
       Storehouse.store(path, [name: entry.client_name, content_type: entry.client_type] ++ opts)
     end
+
+    # A file streamed to the store as it came (`mode: :stream`): stored and
+    # checked already, by the writer.
+    defp store(%{storehouse: result}, _entry, _opts), do: result
 
     # A file the browser sent straight to the store (`allow/3`): checked
     # there, by its first bytes.

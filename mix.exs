@@ -13,7 +13,7 @@ defmodule Storehouse.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       dialyzer: [
-        plt_add_apps: [:mix, :ex_unit, :inets, :ssl, :public_key],
+        plt_add_apps: [:mix, :ex_unit, :inets, :ssl, :public_key, :ecto],
         plt_core_path: "priv/plts",
         plt_file: {:no_warn, "priv/plts/project.plt"},
         ignore_warnings: ".dialyzer_ignore.exs"
@@ -48,6 +48,10 @@ defmodule Storehouse.MixProject do
     [
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false},
+      # Storehouse.Ecto: files in a record's column. Optional.
+      {:ecto, "~> 3.12", optional: true},
+      {:ecto_sql, "~> 3.12", only: :test},
+      {:postgrex, "~> 0.19", only: :test},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       # The LiveView test client, for Storehouse.Live's tests.
       {:lazy_html, "~> 0.1", only: :test},
@@ -90,13 +94,15 @@ defmodule Storehouse.MixProject do
         "guides/liveview.md",
         "guides/direct_uploads.md",
         "guides/private_files.md",
+        "guides/ecto.md",
         "CHANGELOG.md"
       ],
       groups_for_modules: [
         Files: [Storehouse, Storehouse.File, Storehouse.Check],
         Stores: [Storehouse.Adapter, Storehouse.Local, Storehouse.Local.Plug, Storehouse.S3],
         "Private files": [Storehouse.Redirect],
-        LiveView: [Storehouse.Live]
+        LiveView: [Storehouse.Live, Storehouse.Live.Writer],
+        Ecto: [Storehouse.Ecto, Storehouse.Ecto.File]
       ]
     ]
   end

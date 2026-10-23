@@ -120,5 +120,38 @@ defmodule Storehouse.Adapter do
   """
   @callback checksum(key()) :: {:ok, String.t() | nil} | {:error, term()}
 
-  @optional_callbacks presign_upload: 3, signed_url: 2, read_head: 2, checksum: 1
+  @doc """
+  Copies the file with key `from` to the key `to`, in the store, without
+  it going through the app: to make a temporary file permanent
+  (`Storehouse.promote/2`). A missing `from` gives `{:error, :enoent}`.
+  Optional.
+  """
+  @callback copy(from :: key(), to :: key()) :: :ok | {:error, term()}
+
+  @doc """
+  Opens a file with `key` that its bytes are written to as they come, in
+  `c:stream_write/2`: an upload streamed through the app, with no file of
+  its own on the disk (`Storehouse.Live.allow/3`, `mode: :stream`).
+  Optional, with the three other `stream_` callbacks.
+  """
+  @callback stream_open(key(), meta()) :: {:ok, stream :: term()} | {:error, term()}
+
+  @doc "Writes the next bytes of a streamed file."
+  @callback stream_write(stream :: term(), iodata()) :: {:ok, stream :: term()} | {:error, term()}
+
+  @doc "Ends a streamed file, which is then in the store: its URL."
+  @callback stream_close(stream :: term()) :: {:ok, url :: String.t()} | {:error, term()}
+
+  @doc "Gives up a streamed file: nothing of it stays in the store."
+  @callback stream_abort(stream :: term()) :: :ok
+
+  @optional_callbacks presign_upload: 3,
+                      signed_url: 2,
+                      read_head: 2,
+                      checksum: 1,
+                      copy: 2,
+                      stream_open: 2,
+                      stream_write: 2,
+                      stream_close: 1,
+                      stream_abort: 1
 end

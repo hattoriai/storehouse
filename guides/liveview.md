@@ -75,9 +75,12 @@ placeholder of yours for the file, say). The reasons are the upload's
 (`:not_accepted` for `:accept`, `:too_large` for `:max_pixels`) and the
 store's own.
 
-## Direct uploads
+## Direct and streamed uploads
 
 `Storehouse.Live.allow/3`, in place of `allow_upload/3`, sends the files
 straight from the browser to the store, when the store takes direct
-uploads (`Storehouse.S3`, and `Storehouse.Local` in development):
-`consume/3` checks them there. See [Direct uploads](direct_uploads.md).
+uploads (`Storehouse.S3`, and `Storehouse.Local` in development), or, with
+`mode: :stream`, through the LiveView and on to the store as they come,
+with no file on the app's disk: `consume/3` gives them stored and
+checked. See [Direct uploads](direct_uploads.md), and [Ecto](ecto.md)
+for files in records.

@@ -94,6 +94,23 @@ defmodule Storehouse.SignedTest do
       refute File.exists?(Path.join(root, upload.key))
     end
 
+    test "is temporary with cache: true, until it is made permanent", %{root: root, public: opts} do
+      data = File.read!(Path.join(@fixtures, "small.png"))
+
+      {:ok, upload} =
+        Storehouse.presign_upload("a.png", "image/png", byte_size(data), cache: true)
+
+      assert String.starts_with?(upload.key, "cache/")
+      assert put_file(upload, data, opts).status == 200
+
+      {:ok, file} = Storehouse.verify_upload(upload.key)
+      assert Storehouse.cached?(file)
+      {:ok, file} = Storehouse.promote(file)
+      refute Storehouse.cached?(file)
+      assert File.exists?(Path.join(root, file.key))
+      refute File.exists?(Path.join(root, upload.key))
+    end
+
     test "is refused before it starts: a type not taken, a file too large" do
       assert {:error, :not_accepted} =
                Storehouse.presign_upload("a.pdf", "application/pdf", 10,

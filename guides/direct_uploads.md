@@ -57,8 +57,36 @@ let liveSocket = new LiveSocket("/live", Socket, {
 
 `allow/3` signs direct uploads when the store does; with a store that
 does not (an adapter of yours with the three callbacks), or with
-`direct: false`, the files come to the LiveView as a plain upload, and
+`mode: :server`, the files come to the LiveView as a plain upload, and
 `consume/3` stores them. Your LiveView is the same either way.
+
+## Streamed through the app: mode: :stream
+
+When the browser cannot reach the store (a bucket with no CORS, a store
+in a private network, LocalStack inside a container), or you would rather
+it did not, `mode: :stream` sends the file over the LiveView's socket, and
+on to the store as each chunk comes (`Storehouse.Live.Writer`):
+
+```elixir
+Storehouse.Live.allow(socket, :videos,
+  mode: :stream,
+  types: ["video/mp4", "video/webm"],
+  accept: ~w(.mp4 .webm),
+  max_file_size: 2_000_000_000,
+  auto_upload: true,
+  progress: &handle_progress/3
+)
+```
+
+Nothing of the file is written to the app's disk. To S3 it goes in the
+parts of a multipart upload (8 MB each, `:part_size` of
+`Storehouse.S3`), each with its checksum, at most two on their way while
+the next chunks arrive, from a process of their own; the upload waits
+when they are, so a fast browser never fills the app's memory. Its first
+bytes are checked as soon as they are there: a file that is not what it
+said stops, and nothing of it stays in the store. The whole file's
+checksum is computed on the way. No uploader in `app.js`: it is
+LiveView's own.
 
 ## What is signed
 

@@ -47,7 +47,9 @@ defmodule Storehouse do
     * `[:storehouse, :verify_upload, ...]` - `verify_upload/2`, with
       `:key` and `:adapter`;
     * `[:storehouse, :delete, ...]` - `delete/2`, with `:key` and
-      `:adapter`.
+      `:adapter`;
+    * `[:storehouse, :promote, ...]` - `promote/2`, with `:key` (the
+      temporary one) and `:adapter`.
 
   The `:stop` event's metadata has the outcome: `result: :ok` with the
   `:file` (or the `:key`), or `result: :error` with the `:reason` (a file
@@ -97,6 +99,9 @@ defmodule Storehouse do
     * `:adapter` - the store. The default is `adapter/0`.
     * `:key` - a function of the name and the checked content type that
       gives the key. The default is `&key/2`.
+    * `:cache` - `true` stores the file under the temporary prefix
+      (`cache_prefix/0`), until `promote/2` makes it permanent: an upload
+      of a form that may never be saved.
     * `:preview` - a function of the stored file and `path` that gives
       the URL of a smaller image of it (a thumbnail, a PDF's first page, a
       video's poster), or `nil`. It runs while `path` is still there; the
@@ -116,7 +121,7 @@ defmodule Storehouse do
 
     with {:ok, description} <- Check.describe(path, claim, opts),
          :ok <- accepted(description.content_type, Keyword.get(opts, :accept)),
-         {:ok, key} <- new_key(Keyword.get(opts, :key, &key/2), name, description.content_type),
+         {:ok, key} <- new_key(opts, name, description.content_type),
          checksum = checksum(path),
          meta = %{
            name: name,
@@ -145,10 +150,80 @@ defmodule Storehouse do
   defp accepted(type, accept) when is_list(accept),
     do: if(type in accept, do: :ok, else: {:error, :not_accepted})
 
-  defp new_key(fun, name, content_type) do
-    case fun.(name, content_type) do
-      key when is_binary(key) -> {:ok, key}
+  @doc false
+  def new_key_for(opts, name, content_type), do: new_key(opts, name, content_type)
+
+  # The key of a new file: the `:key` function's, or `key/2`'s; under the
+  # temporary prefix with `cache: true`.
+  defp new_key(opts, name, content_type) do
+    case Keyword.get(opts, :key, &key/2).(name, content_type) do
+      key when is_binary(key) -> {:ok, if(opts[:cache], do: cache_prefix() <> key, else: key)}
       other -> {:error, {:invalid_key, other}}
+    end
+  end
+
+  @doc """
+  The prefix of the keys of temporary files (`cache: true`): `"cache/"`,
+  or `config :storehouse, cache_prefix: "tmp/"`. A bucket's lifecycle rule
+  deletes what stays there (see the Ecto guide).
+  """
+  @spec cache_prefix() :: String.t()
+  def cache_prefix, do: Application.get_env(:storehouse, :cache_prefix, "cache/")
+
+  @doc "Whether a file (or a key) is a temporary one, under `cache_prefix/0`."
+  @spec cached?(Storehouse.File.t() | Storehouse.Adapter.key()) :: boolean()
+  def cached?(%Storehouse.File{key: key}), do: cached?(key)
+  def cached?(key) when is_binary(key), do: String.starts_with?(key, cache_prefix())
+
+  @doc """
+  Makes a temporary file (`cache: true`) permanent: copies it, in the
+  store, to its key without the temporary prefix, deletes the temporary
+  one, and gives the file at its new key. A file that is not temporary is
+  given as it is.
+
+  It can run again for the same file: when the temporary file is gone and
+  the permanent one is there (a save that rolled back after it, and was
+  tried again), it gives the permanent one.
+
+  ## Options
+
+    * `:adapter` - as for `store/2`. The adapter copies files in the store
+      (`c:Storehouse.Adapter.copy/2`): `Storehouse.Local` and
+      `Storehouse.S3` do; another gives `{:error, :not_supported}`.
+    * `:keep_cached` - `true` keeps the temporary file. The default is
+      `false`.
+  """
+  @spec promote(Storehouse.File.t(), keyword()) :: {:ok, Storehouse.File.t()} | {:error, term()}
+  def promote(%Storehouse.File{key: key} = file, opts \\ []) do
+    if cached?(key) do
+      adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+      span(:promote, %{key: key, adapter: adapter}, fn -> do_promote(file, adapter, opts) end)
+    else
+      {:ok, file}
+    end
+  end
+
+  defp do_promote(%Storehouse.File{key: from} = file, adapter, opts) do
+    to = String.replace_prefix(from, cache_prefix(), "")
+
+    with :ok <- supported(adapter, :copy, 2),
+         :ok <- copy_once(adapter, from, to) do
+      unless opts[:keep_cached], do: adapter.delete(from)
+      {:ok, %{file | key: to, url: adapter.url(to)}}
+    end
+  end
+
+  defp copy_once(adapter, from, to) do
+    case adapter.copy(from, to) do
+      :ok ->
+        :ok
+
+      {:error, :enoent} = error ->
+        # Promoted already: the permanent file is there.
+        if match?({:ok, _head, _size}, adapter.read_head(to, 1)), do: :ok, else: error
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
@@ -241,7 +316,7 @@ defmodule Storehouse do
              do: {:error, :too_large},
              else: :ok
            ),
-         {:ok, key} <- new_key(Keyword.get(opts, :key, &key/2), name, type),
+         {:ok, key} <- new_key(opts, name, type),
          {:ok, upload} <-
            adapter.presign_upload(key, %{name: name, content_type: type, bytes: bytes},
              expires_in: Keyword.get(opts, :expires_in, 600)

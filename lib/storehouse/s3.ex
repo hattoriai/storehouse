@@ -59,7 +59,7 @@ defmodule Storehouse.S3 do
   @behaviour Storehouse.Adapter
 
   alias Storehouse.Check
-  alias Storehouse.S3.Signature
+  alias Storehouse.S3.{Parts, Signature}
 
   @impl Storehouse.Adapter
   def put(key, path, meta) do
@@ -174,6 +174,199 @@ defmodule Storehouse.S3 do
     end
   end
 
+  # An upload streamed through the app (Storehouse.Live.allow/3, mode:
+  # :stream): its bytes, in parts of a multipart upload as they come, with
+  # at most two parts on their way at once while the next ones arrive; a
+  # file smaller than a part, in one PUT. Each part has its checksum,
+  # which the bucket checks.
+
+  @min_part 5 * 1_048_576
+  @in_flight 2
+
+  @impl Storehouse.Adapter
+  def stream_open(key, meta) do
+    with {:ok, uri} <- object_uri(key) do
+      type = Map.get(meta, :content_type, "application/octet-stream")
+      part_size = max(Keyword.get(config(), :part_size, 8 * 1_048_576), @min_part)
+
+      {:ok,
+       %{
+         key: key,
+         uri: uri,
+         type: type,
+         part_size: part_size,
+         buffer: [],
+         size: 0,
+         upload_id: nil,
+         part: 0,
+         parts: [],
+         sender: nil
+       }}
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def stream_write(stream, data) do
+    stream = %{stream | buffer: [stream.buffer, data], size: stream.size + IO.iodata_length(data)}
+    if stream.size >= stream.part_size, do: send_part(stream), else: {:ok, stream}
+  end
+
+  @impl Storehouse.Adapter
+  def stream_close(%{upload_id: nil} = stream) do
+    body = IO.iodata_to_binary(stream.buffer)
+
+    headers =
+      object_headers(stream.type) ++
+        [{"x-amz-checksum-sha256", Base.encode64(Signature.sha256(body))}]
+
+    case request(:put, stream.uri, headers, body) do
+      {:ok, status, _headers, _body} when status in 200..299 -> {:ok, url(stream.key)}
+      {:ok, status, _headers, body} -> {:error, {:s3, status, body}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def stream_close(stream) do
+    with {:ok, stream} <- if(stream.size > 0, do: send_part(stream), else: {:ok, stream}),
+         {:ok, parts} <- Parts.finish(stream.sender),
+         :ok <- complete(%{stream | parts: parts}) do
+      Parts.stop(stream.sender)
+      {:ok, url(stream.key)}
+    else
+      {:error, reason} ->
+        stream_abort(stream)
+        {:error, reason}
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def stream_abort(stream) do
+    if stream.sender, do: Parts.stop(stream.sender)
+
+    if stream.upload_id do
+      _result = request(:delete, query(stream.uri, %{"uploadId" => stream.upload_id}), [], nil)
+    end
+
+    :ok
+  end
+
+  defp object_headers(type),
+    do: [{"content-type", type}, {"content-disposition", disposition(type)}]
+
+  defp send_part(stream) do
+    with {:ok, stream} <- start_multipart(stream) do
+      body = IO.iodata_to_binary(stream.buffer)
+      n = stream.part + 1
+
+      case Parts.put(stream.sender, n, body) do
+        :ok -> {:ok, %{stream | buffer: [], size: 0, part: n}}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp start_multipart(%{upload_id: nil} = stream) do
+    headers = object_headers(stream.type) ++ [{"x-amz-checksum-algorithm", "SHA256"}]
+
+    case request(:post, query(stream.uri, %{"uploads" => ""}), headers, nil) do
+      {:ok, 200, _headers, body} ->
+        case Regex.run(~r{<UploadId>([^<]+)</UploadId>}, body) do
+          [_, id] ->
+            upload = &upload_part(%{stream | upload_id: id}, &1, &2)
+            {:ok, sender} = Parts.start(upload, @in_flight)
+            {:ok, %{stream | upload_id: id, sender: sender}}
+
+          nil ->
+            {:error, {:s3, 200, body}}
+        end
+
+      {:ok, status, _headers, body} ->
+        {:error, {:s3, status, body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp start_multipart(stream), do: {:ok, stream}
+
+  defp upload_part(stream, n, body) do
+    checksum = Base.encode64(Signature.sha256(body))
+
+    uri =
+      query(stream.uri, %{"partNumber" => Integer.to_string(n), "uploadId" => stream.upload_id})
+
+    case request(:put, uri, [{"x-amz-checksum-sha256", checksum}], body) do
+      {:ok, 200, headers, _body} ->
+        {_name, etag} = List.keyfind(headers, "etag", 0, {"etag", ""})
+        {:ok, {n, etag, checksum}}
+
+      {:ok, status, _headers, body} ->
+        {:error, {:s3, status, body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp complete(stream) do
+    parts =
+      Enum.map_join(stream.parts, "", fn {n, etag, checksum} ->
+        "<Part><PartNumber>#{n}</PartNumber><ETag>#{escape(etag)}</ETag><ChecksumSHA256>#{checksum}</ChecksumSHA256></Part>"
+      end)
+
+    body = "<CompleteMultipartUpload>#{parts}</CompleteMultipartUpload>"
+    uri = query(stream.uri, %{"uploadId" => stream.upload_id})
+
+    # As a copy, a completion can fail after its 200.
+    case request(:post, uri, [{"content-type", "application/xml"}], body) do
+      {:ok, 200, _headers, response} ->
+        if response =~ "<Error>", do: {:error, {:s3, 200, response}}, else: :ok
+
+      {:ok, status, _headers, response} ->
+        {:error, {:s3, status, response}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp query(uri, params), do: %{uri | query: URI.encode_query(params, :rfc3986)}
+
+  defp escape(text),
+    do:
+      text
+      |> String.replace("&", "&amp;")
+      |> String.replace("<", "&lt;")
+      |> String.replace(">", "&gt;")
+
+  @impl Storehouse.Adapter
+  def copy(from, to) do
+    with {:ok, _from} <- object_uri(from),
+         {:ok, uri} <- object_uri(to) do
+      source =
+        "/#{Keyword.fetch!(config(), :bucket)}/" <>
+          Enum.map_join(String.split(from, "/"), "/", &Signature.encode/1)
+
+      # A copy can fail after its 200: the error is then in the body.
+      case request(:put, uri, [{"x-amz-copy-source", source}], nil) do
+        {:ok, 200, _headers, body} ->
+          error_in_body(body)
+
+        {:ok, 404, _headers, _body} ->
+          {:error, :enoent}
+
+        {:ok, status, _headers, body} ->
+          {:error, {:s3, status, body}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp error_in_body(body), do: if(body =~ "<Error>", do: {:error, {:s3, 200, body}}, else: :ok)
+
   @impl Storehouse.Adapter
   def checksum(key) do
     with {:ok, uri} <- object_uri(key) do
@@ -279,8 +472,14 @@ defmodule Storehouse.S3 do
 
     request =
       case body do
+        nil when method in [:put, :post] ->
+          {url, request_headers, ~c"application/octet-stream", ""}
+
         nil ->
           {url, request_headers}
+
+        body when is_binary(body) ->
+          {url, request_headers, String.to_charlist(type), body}
 
         {:file, path, size} ->
           {url, [{~c"content-length", Integer.to_charlist(size)} | request_headers],

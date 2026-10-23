@@ -40,6 +40,23 @@ The first release: the storage of Kotoba and Hakushi, taken out of them.
   a lasting URL that checks the person and redirects to a signed one.
 - `Storehouse.Live.consume/3`: the files of a LiveView upload, each
   stored once, with a result for each.
+- Streamed uploads: `Storehouse.Live.allow/3` with `mode: :stream` sends
+  a file through the LiveView and on to the store as each chunk comes
+  (`Storehouse.Live.Writer`), with no file on the app's disk: to S3 in
+  the parts of a multipart upload, each with its checksum, two in flight
+  from a process of their own, the upload held back when they are; its
+  first bytes checked on the way. The optional adapter callbacks
+  `stream_open/2`, `stream_write/2`, `stream_close/1` and `stream_abort/1`
+  (`Storehouse.S3`, `Storehouse.Local`).
+- Temporary, then permanent: `cache: true` stores a file under the
+  temporary prefix (`Storehouse.cache_prefix/0`), and `Storehouse.promote/2`
+  makes it permanent with a copy in the store (the optional adapter
+  callback `copy/2`: S3's CopyObject, the local disk's copy).
+- `Storehouse.Ecto`: files in a record's columns (`Storehouse.Ecto.File`,
+  or a list of them), put with `put_file/4`, checked against the field's
+  limits, made permanent in the save's transaction, and, with `update/3`
+  and `delete/3`, deleted from the store once the record no longer has
+  them.
 - Checksums: each `Storehouse.File` has the SHA-256 of its bytes
   (`checksum`, Base64), sent to S3 with the file
   (`x-amz-checksum-sha256`), which checks and keeps it;
