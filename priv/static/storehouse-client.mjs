@@ -21,6 +21,12 @@
 // tried again on a network error), then registered with the others that
 // finish about then. A file the app has already is not sent: its result is
 // "existing".
+//
+// With multipartUrl (Storehouse.Plug.Multipart), a file of multipartThreshold
+// or more goes in parts, a few at a time, each with its checksum and each
+// tried again on its own, then is put together and checked by the app.
+// Its upload is remembered (localStorage): after a reload, the same file
+// added again goes on from the parts the store has.
 
 const DEFAULTS = {
   concurrency: 4,
@@ -30,6 +36,9 @@ const DEFAULTS = {
   retries: 2,
   checksum: true,
   checksumMaxBytes: 512 * 1024 * 1024,
+  multipartThreshold: 100 * 1024 * 1024,
+  partConcurrency: 4,
+  partRetries: 3,
 };
 
 /**
@@ -178,6 +187,11 @@ export function createUploadQueue(options) {
         if (upload.done) return;
         controller.abort();
         finish(upload, { status: "cancelled" });
+        // A large file's parts are given up, and it is forgotten.
+        if (upload.abortParts) {
+          upload.abortParts();
+          forget(opts.storage === undefined ? globalThis.localStorage : opts.storage, `storehouse:${file.name}:${file.size}:${file.lastModified ?? ""}`);
+        }
       },
     };
     upload.signal = controller.signal;
@@ -202,6 +216,11 @@ export function createUploadQueue(options) {
     const sum = opts.checksum && upload.file.size <= opts.checksumMaxBytes ? await checksum(upload.file) : null;
     if (upload.done) return;
     upload.checksum = sum;
+    if (opts.multipartUrl && upload.file.size >= opts.multipartThreshold) {
+      upload.multipart = true;
+      waiting.push(upload);
+      return sendNext();
+    }
     toPresign.push(upload);
     if (toPresign.length >= opts.presignBatchSize) presignNow();
     else presignTimer ??= setTimeout(presignNow, 0);
@@ -256,6 +275,7 @@ export function createUploadQueue(options) {
   }
 
   async function send(upload, attempt = 0) {
+    if (upload.multipart) return sendParts(upload);
     upload.status = "uploading";
     try {
       await put(upload.signed, upload.file, (fraction) => upload.setProgress(Math.min(fraction, 0.99)), upload.signal);
@@ -304,6 +324,92 @@ export function createUploadQueue(options) {
     });
   }
 
+  // A large file in parts: started (or found again, after a reload), its
+  // parts the store lacks sent a few at a time, then completed.
+  async function sendParts(upload) {
+    const { file } = upload;
+    const url = (action) => `${opts.multipartUrl.replace(/\/$/, "")}/${action}`;
+    const storage = opts.storage === undefined ? globalThis.localStorage : opts.storage;
+    const remembered = `storehouse:${file.name}:${file.size}:${file.lastModified ?? ""}`;
+    upload.status = "uploading";
+
+    try {
+      let started = recall(storage, remembered);
+      let have = [];
+
+      if (started) {
+        try {
+          have = (await fetchJson(url("list"), { key: started.key, upload_id: started.upload_id })).parts;
+        } catch {
+          started = null;
+        }
+      }
+
+      if (!started) {
+        const item = { name: file.name || "file", type: file.type || null, bytes: file.size };
+        const answer = await fetchJson(url("start"), upload.checksum ? { ...item, checksum: upload.checksum } : item);
+        if (answer.existing) {
+          upload.setProgress(1);
+          return finish(upload, { status: "existing", value: answer.existing });
+        }
+        started = answer.upload;
+        remember(storage, remembered, started);
+      }
+
+      upload.key = started.key;
+      upload.uploadId = started.upload_id;
+      upload.abortParts = () => fetchJson(url("abort"), { key: started.key, upload_id: started.upload_id }).catch(() => {});
+
+      const size = started.part_bytes;
+      const count = Math.max(Math.ceil(file.size / size), 1);
+      const done = new Set(have.map((part) => part.number));
+      const sent = new Map(have.map((part) => [part.number, part.bytes]));
+      const progress = () => upload.setProgress(Math.min([...sent.values()].reduce((a, b) => a + b, 0) / file.size, 0.99));
+      progress();
+
+      const todo = [];
+      for (let n = 1; n <= count; n++) if (!done.has(n)) todo.push(n);
+
+      const sendPart = async (n) => {
+        const part = file.slice((n - 1) * size, Math.min(n * size, file.size));
+        const sum = await partChecksum(part);
+        for (let attempt = 0; ; attempt++) {
+          if (upload.done) return;
+          try {
+            const [signed] = (await fetchJson(url("sign"), { key: started.key, upload_id: started.upload_id, parts: [sum ? { number: n, checksum: sum } : { number: n }] })).parts;
+            await put(signed, part, (fraction) => {
+              sent.set(n, part.size * fraction);
+              progress();
+            }, upload.signal);
+            sent.set(n, part.size);
+            progress();
+            return;
+          } catch (error) {
+            if (upload.done) return;
+            const again = error?.status === 0 || error?.status >= 500 || error?.code === "upload_failed";
+            if (!again || attempt >= opts.partRetries) throw error;
+            await sleep(500 * 2 ** attempt);
+          }
+        }
+      };
+
+      const workers = Array.from({ length: Math.min(opts.partConcurrency, todo.length) }, async () => {
+        while (todo.length && !upload.done) await sendPart(todo.shift());
+      });
+      await Promise.all(workers);
+      if (upload.done) return;
+
+      const answer = await fetchJson(url("complete"), { key: started.key, upload_id: started.upload_id, bytes: file.size, name: file.name || "file" });
+      forget(storage, remembered);
+      upload.setProgress(1);
+      if (answer.existing) finish(upload, { status: "existing", value: answer.existing });
+      else finish(upload, { status: "registered", value: answer });
+    } catch (error) {
+      // Remembered still: added again, it goes on from where it stopped.
+      finish(upload, { status: "error", error: error?.code || "upload_failed" });
+    }
+  }
+
   return {
     add,
     on(event, fn) {
@@ -314,6 +420,36 @@ export function createUploadQueue(options) {
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// A part's SHA-256, in Base64, as the store checks it; null where the
+// browser cannot.
+async function partChecksum(blob) {
+  if (!globalThis.crypto?.subtle) return null;
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()));
+  return btoa(String.fromCharCode(...digest));
+}
+
+// Uploads remembered across reloads, where the browser keeps them.
+function recall(storage, name) {
+  try {
+    const saved = storage?.getItem(name);
+    return saved ? JSON.parse(saved) : null;
+  } catch {
+    return null;
+  }
+}
+
+function remember(storage, name, started) {
+  try {
+    storage?.setItem(name, JSON.stringify({ key: started.key, upload_id: started.upload_id, part_bytes: started.part_bytes }));
+  } catch {}
+}
+
+function forget(storage, name) {
+  try {
+    storage?.removeItem(name);
+  } catch {}
+}
 
 // JSON to the app, with its headers (a CSRF token); an error code from its
 // answer when it refuses the whole batch.

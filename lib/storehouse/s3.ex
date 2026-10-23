@@ -130,6 +130,26 @@ defmodule Storehouse.S3 do
       def stream_close(stream), do: Storehouse.S3.stream_close(stream)
       @impl true
       def stream_abort(stream), do: Storehouse.S3.stream_abort(stream)
+      @impl true
+      def multipart_start(key, meta), do: Storehouse.S3.multipart_start(config(), key, meta)
+      @impl true
+      def multipart_sign(key, upload_id, number, opts),
+        do: Storehouse.S3.multipart_sign(config(), key, upload_id, number, opts)
+
+      @impl true
+      def multipart_parts(key, upload_id),
+        do: Storehouse.S3.multipart_parts(config(), key, upload_id)
+
+      @impl true
+      def multipart_complete(key, upload_id, parts),
+        do: Storehouse.S3.multipart_complete(config(), key, upload_id, parts)
+
+      @impl true
+      def multipart_abort(key, upload_id),
+        do: Storehouse.S3.multipart_abort(config(), key, upload_id)
+
+      @impl true
+      def multipart_uploads(prefix), do: Storehouse.S3.multipart_uploads(config(), prefix)
     end
   end
 
@@ -472,6 +492,182 @@ defmodule Storehouse.S3 do
     end
   end
 
+  # A multipart upload straight from the browser (Storehouse.presign_multipart/4):
+  # started here, each part signed for the browser's PUT with its
+  # checksum, its parts listed back from the bucket, completed with
+  # those, never with what the browser says.
+  @impl Storehouse.Adapter
+  def multipart_start(key, meta), do: multipart_start(config(), key, meta)
+
+  @doc false
+  def multipart_start(c, key, meta) do
+    with {:ok, uri} <- object_uri(c, key) do
+      type = Map.get(meta, :content_type, "application/octet-stream")
+
+      headers =
+        object_headers(type) ++ cache_header(c, meta) ++ [{"x-amz-checksum-algorithm", "SHA256"}]
+
+      case request(c, :post, query(uri, %{"uploads" => ""}), headers, nil) do
+        {:ok, 200, _headers, body} ->
+          upload_id(body)
+
+        {:ok, status, _headers, body} ->
+          {:error, {:s3, status, body}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp upload_id(body) do
+    case tag(body, "UploadId") do
+      "" -> {:error, {:s3, 200, body}}
+      id -> {:ok, unescape(id)}
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def multipart_sign(key, upload_id, number, opts),
+    do: multipart_sign(config(), key, upload_id, number, opts)
+
+  @doc false
+  def multipart_sign(c, key, upload_id, number, opts) do
+    with {:ok, uri} <- object_uri(c, key) do
+      uri = query(uri, %{"partNumber" => Integer.to_string(number), "uploadId" => upload_id})
+
+      headers =
+        if checksum = opts[:checksum], do: %{"x-amz-checksum-sha256" => checksum}, else: %{}
+
+      signed =
+        Signature.presign("PUT", uri, Keyword.get(opts, :expires_in, 3_600), credentials(c),
+          headers: Map.to_list(headers)
+        )
+
+      {:ok, %{method: "PUT", url: URI.to_string(signed), headers: headers}}
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def multipart_parts(key, upload_id), do: multipart_parts(config(), key, upload_id)
+
+  @doc false
+  def multipart_parts(c, key, upload_id) do
+    with {:ok, uri} <- object_uri(c, key), do: parts_from(c, uri, upload_id, nil, [])
+  end
+
+  # ListParts, a page of a thousand at a time.
+  defp parts_from(c, uri, upload_id, marker, acc) do
+    params = %{"uploadId" => upload_id}
+    params = if marker, do: Map.put(params, "part-number-marker", marker), else: params
+
+    case request(c, :get, query(uri, params), [], nil) do
+      {:ok, 200, _headers, body} ->
+        parts =
+          for [_all, part] <- Regex.scan(~r{<Part>(.*?)</Part>}s, body) do
+            %{
+              number: part |> tag("PartNumber") |> String.to_integer(),
+              etag: part |> tag("ETag") |> unescape(),
+              bytes: part |> tag("Size") |> String.to_integer(),
+              checksum: part |> tag("ChecksumSHA256") |> then(&if(&1 == "", do: nil, else: &1))
+            }
+          end
+
+        acc = acc ++ parts
+
+        if tag(body, "IsTruncated") == "true",
+          do: parts_from(c, uri, upload_id, tag(body, "NextPartNumberMarker"), acc),
+          else: {:ok, acc}
+
+      {:ok, 404, _headers, _body} ->
+        {:error, :enoent}
+
+      {:ok, status, _headers, body} ->
+        {:error, {:s3, status, body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def multipart_complete(key, upload_id, parts),
+    do: multipart_complete(config(), key, upload_id, parts)
+
+  @doc false
+  def multipart_complete(c, key, upload_id, parts) do
+    with {:ok, uri} <- object_uri(c, key) do
+      complete(%{
+        config: c,
+        uri: uri,
+        upload_id: upload_id,
+        parts: Enum.map(parts, &{&1.number, &1.etag, &1.checksum})
+      })
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def multipart_abort(key, upload_id), do: multipart_abort(config(), key, upload_id)
+
+  @doc false
+  def multipart_abort(c, key, upload_id) do
+    with {:ok, uri} <- object_uri(c, key) do
+      case request(c, :delete, query(uri, %{"uploadId" => upload_id}), [], nil) do
+        {:ok, status, _headers, _body} when status in 200..299 or status == 404 -> :ok
+        {:ok, status, _headers, body} -> {:error, {:s3, status, body}}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def multipart_uploads(prefix), do: multipart_uploads(config(), prefix)
+
+  @doc false
+  # The multipart uploads started under a prefix and not completed, a page
+  # at a time: for the sweeper, as abandoned ones keep their parts.
+  def multipart_uploads(c, prefix), do: uploads_from(c, prefix, nil, [])
+
+  defp uploads_from(c, prefix, markers, acc) do
+    params = %{"uploads" => "", "prefix" => prefix}
+
+    params =
+      case markers do
+        {key, id} -> Map.merge(params, %{"key-marker" => key, "upload-id-marker" => id})
+        nil -> params
+      end
+
+    case request(c, :get, query(bucket_uri(c), params), [], nil) do
+      {:ok, 200, _headers, body} ->
+        uploads =
+          for [_all, upload] <- Regex.scan(~r{<Upload>(.*?)</Upload>}s, body) do
+            %{
+              key: upload |> tag("Key") |> unescape(),
+              upload_id: upload |> tag("UploadId") |> unescape(),
+              started_at: upload |> tag("Initiated") |> modified_at()
+            }
+          end
+
+        acc = acc ++ uploads
+
+        if tag(body, "IsTruncated") == "true",
+          do:
+            uploads_from(
+              c,
+              prefix,
+              {unescape(tag(body, "NextKeyMarker")), unescape(tag(body, "NextUploadIdMarker"))},
+              acc
+            ),
+          else: {:ok, acc}
+
+      {:ok, status, _headers, body} ->
+        {:error, {:s3, status, body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   # An upload streamed through the app (Storehouse.Live.allow/3, mode:
   # :stream): its bytes, in parts of a multipart upload as they come, with
   # at most two parts on their way at once while the next ones arrive; a
@@ -632,7 +828,8 @@ defmodule Storehouse.S3 do
 
     parts =
       Enum.map_join(stream.parts, "", fn {n, etag, checksum} ->
-        "<Part><PartNumber>#{n}</PartNumber><ETag>#{escape(etag)}</ETag><ChecksumSHA256>#{checksum}</ChecksumSHA256></Part>"
+        sum = if checksum, do: "<ChecksumSHA256>#{checksum}</ChecksumSHA256>", else: ""
+        "<Part><PartNumber>#{n}</PartNumber><ETag>#{escape(etag)}</ETag>#{sum}</Part>"
       end)
 
     body = "<CompleteMultipartUpload>#{parts}</CompleteMultipartUpload>"

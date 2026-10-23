@@ -145,6 +145,53 @@ input.addEventListener("change", () => {
 Its types are in `storehouse-client.d.mts`. Give `fetch` and `put` of your
 own to send the requests another way.
 
+### Very large files, in parts
+
+A file of a few gigabytes (a video, an archive to import) should not be
+one `PUT`: a dropped connection would start it again, and S3 takes at
+most 5 GB in one. With `Storehouse.Plug.Multipart` in the router, the
+client sends such files in parts:
+
+```elixir
+forward "/files/multipart", Storehouse.Plug.Multipart,
+  owner: &MyAppWeb.Files.owner/1,
+  room: &MyAppWeb.Files.room/1,
+  max_bytes: 20_000_000_000
+```
+
+```javascript
+const queue = createUploadQueue({
+  presignUrl: "/files/presign",
+  registerUrl: "/files/register",
+  multipartUrl: "/files/multipart",
+  headers: {"x-csrf-token": csrfToken},
+})
+```
+
+- A file of `multipartThreshold` or more (100 MiB by default) goes in
+  parts, of the size the app gives (16 MiB by default), four at a time
+  (`partConcurrency`). Each part is sent with its SHA-256, which the
+  bucket checks, and each is retried on its own after a network error or
+  a `5xx` (`partRetries`).
+- The upload is remembered in `localStorage`: after a reload or a crash,
+  the same file added again carries on from the parts the store has. Its
+  result is the same as a file sent whole. `storage: null` remembers
+  nothing.
+- The app completes it: it puts together the parts the store has, never
+  what the browser says, refuses a size other than the file's, and checks
+  the file as `Storehouse.Plug.Register` checks one.
+- `cancel()` gives the upload up, and its parts are deleted.
+
+Uploads never completed keep their parts in the bucket, and S3 bills
+them: give the bucket a lifecycle rule that aborts them
+(`AbortIncompleteMultipartUpload`, after a day), or run
+`Storehouse.Sweeper`, which aborts those older than its `:max_age`.
+
+```json
+{"Rules": [{"ID": "storehouse-multipart", "Status": "Enabled", "Filter": {},
+            "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1}}]}
+```
+
 ## Uppy
 
 Uppy's [AWS S3 plugin](https://uppy.io/docs/aws-s3/) asks for one file's
