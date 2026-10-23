@@ -97,6 +97,13 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   JSON, with the owner, the room and the files the app has asked of
   functions of the conn, and the app's own JSON of its records from
   `:then`.
+- `storehouse/client`, in the npm package: the browser's part of uploads
+  from any client (`createUploadQueue`), for the presign and register
+  plugs, with no dependencies. Each file's SHA-256 read in a Web Worker
+  and sent with its presign, the files added together presigned in one
+  request, a few sent at once and each tried again on a network error or
+  the store's 5xx, registered in batches; a result, progress and cancel
+  for each. Types in `storehouse-client.d.mts`.
 
 ### Changed
 

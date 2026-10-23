@@ -103,6 +103,48 @@ Errors are codes, for the frontend to say in its own words:
 `not_owner`, `invalid_item`, `too_many` (a `413` for the whole batch), and
 `upload_failed`. A body that is not a batch is a `400`.
 
+## The JavaScript client
+
+`storehouse/client` (in the `storehouse` npm package, beside the LiveView
+uploader) does the browser's part, with no dependencies:
+
+```javascript
+import {createUploadQueue} from "storehouse/client"
+
+const queue = createUploadQueue({
+  presignUrl: "/files/presign",
+  registerUrl: "/files/register",
+  headers: {"x-csrf-token": csrfToken},
+})
+
+input.addEventListener("change", () => {
+  for (const upload of queue.add(input.files)) {
+    upload.onProgress((fraction) => show(upload.file.name, fraction))
+    upload.result.then((result) => {
+      if (result.status === "registered") addPhoto(result.value.photo)
+      else if (result.status === "existing") highlight(result.value)
+      else if (result.status === "error") say(upload.file.name, result.error)
+    })
+  }
+})
+```
+
+- Each file's SHA-256 is read in a Web Worker (the page does not freeze
+  on a large file), and sent with its presign: a file the app has comes
+  back as `existing`, and is never uploaded.
+- The files added together are presigned in one request, sent to the
+  store four at a time (`concurrency`), each sent again after a network
+  error or the store's `5xx` (`retries`), and registered in batches: as
+  soon as ten are done (`registerBatchSize`), or 400 ms after the first
+  (`registerMaxWaitMs`).
+- Each upload has its `result`, a promise of `{status, value}` or
+  `{status: "error", error}` (the code), its progress from 0 to 1 (1 only
+  once the store has the file), and `cancel()`. `queue.on("registered", …)`
+  and the like follow them all.
+
+Its types are in `storehouse-client.d.mts`. Give `fetch` and `put` of your
+own to send the requests another way.
+
 ## Uppy
 
 Uppy's [AWS S3 plugin](https://uppy.io/docs/aws-s3/) asks for one file's
