@@ -9,6 +9,13 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Added
 
+- `Storehouse.Zip`: a zip of stored files, binaries and streams of the
+  app's, made as a stream (`stream/2`) or into the store as it is made
+  (`store/3`, S3's multipart upload), with nothing on the disk and no more
+  than a chunk in memory; files stored as they are, with data descriptors
+  and ZIP64 past 4 GB or 65,535 files. `size/2` gives its exact size
+  before it is made. Names that could leave the folder are refused, and
+  a stored file whose size changed stops the zip.
 - Reprocessing: `Storehouse.Ecto.reprocess/5` runs analysis steps over
   the files of a field in every record a query gives, a batch at a time
   in the order of the primary key, skipping files that have every step's

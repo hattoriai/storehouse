@@ -8,7 +8,9 @@ exclude =
   [
     s3: !System.get_env("S3_ENDPOINT"),
     ecto: !System.get_env("DATABASE_URL"),
-    node: !System.find_executable("node")
+    node: !System.find_executable("node"),
+    # A zip past 4 GB, on the disk: STOREHOUSE_LARGE=1.
+    large: !System.get_env("STOREHOUSE_LARGE")
   ]
   |> Enum.filter(&elem(&1, 1))
   |> Keyword.keys()

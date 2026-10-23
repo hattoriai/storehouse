@@ -102,6 +102,9 @@ It gives your app:
 * **files read back**: a file's size and type without reading it, its
   bytes all at once, as a stream a chunk at a time, or to a path, each
   refused past a size limit before a byte is read;
+* **zips of stored files**, made as a stream into the store or a
+  response, with nothing on the disk, past 4 GB (ZIP64), their size
+  known before they are made: an account's export;
 * **work after the upload**: steps of your own (an image's EXIF, a PDF's
   pages) run on a stored file, at once or out of the request, their
   results kept with it and saved in its record's column; and run again
