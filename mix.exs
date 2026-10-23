@@ -97,6 +97,7 @@ defmodule Storehouse.MixProject do
         "guides/serving.md",
         "guides/liveview.md",
         "guides/direct_uploads.md",
+        "guides/any_client.md",
         "guides/private_files.md",
         "guides/ecto.md",
         "guides/analysis.md",
@@ -116,6 +117,7 @@ defmodule Storehouse.MixProject do
         Events: [Storehouse.Notify, Storehouse.Notify.PubSub],
         Tests: [Storehouse.Memory, Storehouse.Test],
         "Private files": [Storehouse.Redirect],
+        "Any client": [Storehouse.Batch, Storehouse.Plug.Presign, Storehouse.Plug.Register],
         LiveView: [Storehouse.Live, Storehouse.Live.Writer],
         Ecto: [Storehouse.Ecto, Storehouse.Ecto.File]
       ]
