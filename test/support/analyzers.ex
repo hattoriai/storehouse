@@ -44,6 +44,21 @@ defmodule StorehouseTest.Analyzers do
     end
   end
 
+  defmodule Report do
+    @moduledoc false
+    @behaviour Storehouse.Analyzer
+
+    @impl true
+    def needs_file?, do: false
+
+    # A result of its own with an "error" key: a result, not a failure.
+    @impl true
+    def analyze(_file, _path, opts) do
+      if pid = opts[:test], do: send(pid, :report_ran)
+      {:ok, %{"error" => "the scan is blurred"}}
+    end
+  end
+
   defmodule Skip do
     @moduledoc false
     @behaviour Storehouse.Analyzer

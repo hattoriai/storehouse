@@ -12,11 +12,9 @@ defmodule Storehouse.Metadata do
   strings, and dates and times into ISO 8601 strings; anything else is refused, with where it
   is.
 
-  The key `"analyzed"` is the analysis's (what was read from the file: its
-  EXIF, a placeholder): each step writes its own part of it
-  (`Storehouse.File.put_analyzed/3`), and `Storehouse.File.put_metadata/2`
-  never writes it, so analysis never overwrites what a person entered, nor
-  the other way round.
+  What analysis reads from the file itself is not metadata: it is the
+  file's `:analysis` (`Storehouse.Analysis`), so the two never overwrite
+  each other.
   """
 
   @max_depth 8

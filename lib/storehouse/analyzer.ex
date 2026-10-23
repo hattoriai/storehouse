@@ -2,8 +2,8 @@ defmodule Storehouse.Analyzer do
   @moduledoc """
   Work on a file after it is stored: what it is read for (an image's EXIF,
   a placeholder, a video's length, a PDF's pages), each step an analyzer,
-  its result kept in the file's metadata under `"analyzed"`
-  (`Storehouse.File.put_analyzed/3`).
+  what it made of the file kept in the file's `:analysis`, by its name, as
+  a `Storehouse.Analysis`: its status, its result, why it failed.
 
       defmodule MyApp.Analyzers.Pages do
         @behaviour Storehouse.Analyzer
@@ -27,9 +27,9 @@ defmodule Storehouse.Analyzer do
   A step is an analyzer's module, or `{module, opts}`. They run in their
   order, and each is run once: a step whose result the file has already
   is skipped (`force: true` runs it again). A step that fails leaves the
-  others' results, and its own is `%{"error" => reason}`, so the file says
-  why; the next run tries it again. `:skip` means the step does not apply
-  to the file, and is kept as `%{"skipped" => true}`.
+  others' results, and its own analysis is `:failed`, with why; the next
+  run tries it again. `:skip` means the step does not apply to the file,
+  and its analysis is `:skipped`.
 
   The file is read from the store once for all the steps that need it
   (`c:needs_file?/0`), to a temporary file, and that file is removed
@@ -112,11 +112,11 @@ defmodule Storehouse.Analyzer do
 
   defp normalize(module) when is_atom(module), do: {module, []}
 
+  # Done: ran, and either read the file or found it is not one for it.
   defp done?(file, step) do
-    case Storehouse.File.analyzed(file, name(step)) do
+    case Storehouse.File.analysis(file, name(step)) do
+      %Storehouse.Analysis{status: status} -> status in [:ok, :skipped]
       nil -> false
-      %{"error" => _reason} -> false
-      _result -> true
     end
   end
 
@@ -163,26 +163,25 @@ defmodule Storehouse.Analyzer do
     exception -> {:error, Exception.message(exception)}
   end
 
+  # The step's analysis in the file: its result, as JSON holds it, else
+  # a failure.
   defp keep(file, name, {:ok, result}) when is_map(result) do
-    case Storehouse.File.put_analyzed(file, name, result) do
-      {:ok, file} -> {:ok, file}
-      {:error, reason} -> keep(file, name, {:error, reason})
+    case Storehouse.Metadata.normalize(result) do
+      {:ok, result} ->
+        {:ok, Storehouse.File.put_analysis(file, name, Storehouse.Analysis.ok(result))}
+
+      {:error, reason} ->
+        keep(file, name, {:error, reason})
     end
   end
 
-  defp keep(file, name, :skip) do
-    {:ok, file} = Storehouse.File.put_analyzed(file, name, %{"skipped" => true})
-    {:skip, file}
-  end
+  defp keep(file, name, :skip),
+    do: {:skip, Storehouse.File.put_analysis(file, name, Storehouse.Analysis.skipped())}
 
-  defp keep(file, name, {:error, reason}) do
-    message = if is_binary(reason), do: reason, else: inspect(reason)
-
-    {:ok, file} =
-      Storehouse.File.put_analyzed(file, name, %{"error" => String.slice(message, 0, 500)})
-
-    {{:error, reason}, file}
-  end
+  defp keep(file, name, {:error, reason}),
+    do:
+      {{:error, reason},
+       Storehouse.File.put_analysis(file, name, Storehouse.Analysis.failed(reason))}
 
   defp keep(file, name, other), do: keep(file, name, {:error, {:invalid_result, other}})
 
