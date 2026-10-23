@@ -9,6 +9,21 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Added
 
+- Editing a photo's metadata without re-encoding it, only when asked:
+  `Storehouse.JPEG` removes the location (`strip(jpeg, :gps)`, the Exif
+  GPS directory zeroed and XMP's GPS properties removed), keeps only the
+  tags named (`strip(jpeg, {:keep, tags})`), and writes the author's
+  name, copyright and description (`put_tags/2`), in a JPEG's own
+  segments, its tables and image data copied byte for byte and an MPF
+  index of the pictures after it kept right. `Storehouse.Analyzer.EditMetadata`
+  is the step that writes the edited file back over the original, its
+  checksum and size now in its result, while the file's `:checksum`
+  stays the upload's. It reads only a photo's metadata into memory
+  (`Storehouse.JPEG.edit_file/3`). What makes the changes is a
+  `Storehouse.MetadataEditor`, Storehouse's own (`Builtin`, JPEG) unless
+  the step's `:editor` or `config :storehouse, :metadata_editor` names
+  one of the app's, around ExifTool for other types. A step may now give
+  `{:ok, result, path}`: the steps after it read the file it left.
 - Reading a file back: `Storehouse.head/2` (its size, stored type and
   checksum, without reading it), `Storehouse.read/2` (all of it, refused
   past `:max_bytes` before a byte is read), `Storehouse.stream/2` (a chunk

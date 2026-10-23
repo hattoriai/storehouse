@@ -110,6 +110,10 @@ defmodule Storehouse.MixProject do
           Storehouse.Analyzer,
           Storehouse.Analysis,
           Storehouse.Analyzer.Size,
+          Storehouse.Analyzer.EditMetadata,
+          Storehouse.MetadataEditor,
+          Storehouse.MetadataEditor.Builtin,
+          Storehouse.JPEG,
           Storehouse.Tasks,
           Storehouse.Oban.Analyze
         ],
