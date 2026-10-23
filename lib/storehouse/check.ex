@@ -10,6 +10,13 @@ defmodule Storehouse.Check do
       width and height from their headers: a JPEG's turned as its EXIF
       orientation says, as browsers draw it. The claim does not matter: a
       PNG sent as `text/html` is a PNG.
+    * The images of cameras and phones (`photos/0`): HEIC and HEIF (a
+      phone's photo), AVIF, from their `ftyp` box, with the primary
+      image's size cropped and turned as its `clap` and `irot` say; TIFF, in either byte order,
+      with its size turned as its orientation says. A DNG (a TIFF with a
+      `DNGVersion`) is `image/x-adobe-dng`, a raw file, shown by no
+      browser. A size the start of the file does not hold (a TIFF whose
+      directory comes after its pixels) is `nil`.
     * PDF, from `%PDF-`.
     * MP4 video (`video/mp4`), from its `ftyp` box with an MP4 brand
       (`isom`, `mp41`, `mp42`, `avc1`, `M4V `, …), and WebM video
@@ -41,12 +48,18 @@ defmodule Storehouse.Check do
   @head 262_144
   @octet "application/octet-stream"
   @images ["image/png", "image/jpeg", "image/gif", "image/webp"]
+  @photos @images ++ ["image/heic", "image/heif", "image/avif", "image/tiff"]
 
   @extensions %{
     "image/png" => ".png",
     "image/jpeg" => ".jpg",
     "image/gif" => ".gif",
     "image/webp" => ".webp",
+    "image/heic" => ".heic",
+    "image/heif" => ".heif",
+    "image/avif" => ".avif",
+    "image/tiff" => ".tiff",
+    "image/x-adobe-dng" => ".dng",
     "application/pdf" => ".pdf",
     "video/mp4" => ".mp4",
     "video/webm" => ".webm",
@@ -80,6 +93,10 @@ defmodule Storehouse.Check do
     "image/jpeg",
     "image/gif",
     "image/webp",
+    "image/heic",
+    "image/heif",
+    "image/avif",
+    "image/tiff",
     "application/pdf",
     "video/mp4",
     "video/webm"
@@ -110,6 +127,7 @@ defmodule Storehouse.Check do
   @by_extension @extensions
                 |> Map.new(fn {type, ext} -> {ext, type} end)
                 |> Map.put(".jpeg", "image/jpeg")
+                |> Map.put(".tif", "image/tiff")
                 |> Map.delete(".bin")
 
   @typedoc "What `describe/3` finds."
@@ -123,6 +141,14 @@ defmodule Storehouse.Check do
   @doc "The content types of the images: PNG, JPEG, GIF and WebP."
   @spec images() :: [String.t()]
   def images, do: @images
+
+  @doc """
+  The content types of the images of cameras and phones: those of
+  `images/0`, and HEIC, HEIF, AVIF and TIFF. Not every browser shows
+  them: give them to people as an image of `images/0` (a variant).
+  """
+  @spec photos() :: [String.t()]
+  def photos, do: @photos
 
   @doc "Every type `describe/3` gives, `application/octet-stream` included."
   @spec types() :: [String.t()]
@@ -233,7 +259,7 @@ defmodule Storehouse.Check do
 
   @doc """
   Returns `true` for a checked type that a browser can show in the page:
-  the images, PDF and the videos. Serve every other type with
+  the images (those of `photos/0`), PDF and the videos. Serve every other type with
   `Content-Disposition: attachment`.
 
   ## Examples
@@ -382,7 +408,187 @@ defmodule Storehouse.Check do
     {"image/jpeg", width, height}
   end
 
+  defp image(<<"II", 42::little-16, ifd::little-32, _rest::binary>> = head),
+    do: tiff(head, ifd, :little)
+
+  defp image(<<"MM", 42::big-16, ifd::big-32, _rest::binary>> = head),
+    do: tiff(head, ifd, :big)
+
+  defp image(<<size::32, "ftyp", major::binary-size(4), _minor::32, rest::binary>> = head)
+       when size >= 16 do
+    case heif_type(major, brands(rest, size - 16)) do
+      nil ->
+        nil
+
+      type ->
+        {width, height} = heif_size(binary_part(head, size, byte_size(head) - size))
+        {type, width, height}
+    end
+  end
+
   defp image(_head), do: nil
+
+  # HEIF images by their brands: AVIF (AV1), HEIC (HEVC), or another HEIF.
+  @avif_brands ["avif", "avis"]
+  @heic_brands ["heic", "heix", "heim", "heis", "hevc", "hevx"]
+
+  defp heif_type(major, compatible) do
+    brands = [major | compatible]
+
+    cond do
+      major in @avif_brands -> "image/avif"
+      major in @heic_brands -> "image/heic"
+      major in ["mif1", "msf1"] and Enum.any?(brands, &(&1 in @avif_brands)) -> "image/avif"
+      major in ["mif1", "msf1"] and Enum.any?(brands, &(&1 in @heic_brands)) -> "image/heic"
+      major in ["mif1", "msf1"] -> "image/heif"
+      true -> nil
+    end
+  end
+
+  # The primary item's size (`pitm`, then its `ispe` among the properties
+  # `ipma` gives it in `ipco`), cropped as its `clap` says and turned as
+  # its `irot` says.
+  defp heif_size(boxes) do
+    with {:ok, meta} <- box(boxes, "meta"),
+         <<_version_flags::32, children::binary>> <- meta,
+         {:ok, primary} <- primary_item(children),
+         {:ok, iprp} <- box(children, "iprp"),
+         {:ok, ipco} <- box(iprp, "ipco"),
+         {:ok, ipma} <- box(iprp, "ipma"),
+         properties = for({type, body} <- boxes_of(ipco), do: {type, body}),
+         {:ok, indexes} <- associations(ipma, primary),
+         chosen = for(i <- indexes, i in 1..length(properties)//1, do: Enum.at(properties, i - 1)),
+         {_ispe, <<_vf::32, w::32, h::32, _rest::binary>>} <- List.keyfind(chosen, "ispe", 0) do
+      {w, h} = cropped(List.keyfind(chosen, "clap", 0), w, h)
+
+      case List.keyfind(chosen, "irot", 0) do
+        {_irot, <<_reserved::6, angle::2, _rest::binary>>} when angle in [1, 3] ->
+          {dimension(h), dimension(w)}
+
+        _upright ->
+          {dimension(w), dimension(h)}
+      end
+    else
+      _other -> {nil, nil}
+    end
+  end
+
+  # The clean aperture: the coded image cropped to the image shown.
+  defp cropped({_clap, <<wn::32, wd::32, hn::32, hd::32, _rest::binary>>}, w, h)
+       when wd > 0 and hd > 0 and wn > 0 and hn > 0,
+       do: {min(w, div(wn, wd)), min(h, div(hn, hd))}
+
+  defp cropped(_clap, w, h), do: {w, h}
+
+  defp primary_item(children) do
+    case box(children, "pitm") do
+      {:ok, <<0, _flags::24, id::16, _rest::binary>>} -> {:ok, id}
+      {:ok, <<_version, _flags::24, id::32, _rest::binary>>} -> {:ok, id}
+      _none -> :error
+    end
+  end
+
+  # The property indexes (from 1) `ipma` gives the item `id`.
+  defp associations(<<version, flags::24, count::32, entries::binary>>, id) do
+    associations(entries, id, count, version, flags &&& 1)
+  end
+
+  defp associations(_ipma, _id), do: :error
+
+  defp associations(_entries, _id, 0, _version, _wide), do: :error
+
+  defp associations(entries, id, count, version, wide) do
+    id_bits = if version < 1, do: 16, else: 32
+    index_bits = if wide == 1, do: 15, else: 7
+
+    with <<item::size(^id_bits), n, rest::binary>> <- entries,
+         size = n * (index_bits + 1),
+         <<list::bitstring-size(^size), next::bitstring>> <- rest do
+      indexes = for <<_essential::1, index::size(^index_bits) <- list>>, do: index
+
+      if item == id,
+        do: {:ok, indexes},
+        else: associations(next, id, count - 1, version, wide)
+    else
+      _short -> :error
+    end
+  end
+
+  # ISO-BMFF boxes: a 32-bit size (1: a 64-bit size follows; 0: to the end).
+  defp boxes_of(data) do
+    Stream.unfold(data, fn
+      <<size::32, type::binary-size(4), rest::binary>> when size >= 8 ->
+        body = size - 8
+
+        case rest do
+          <<inner::binary-size(^body), next::binary>> -> {{type, inner}, next}
+          _short -> nil
+        end
+
+      _other ->
+        nil
+    end)
+    |> Enum.to_list()
+  end
+
+  defp box(data, type) do
+    case List.keyfind(boxes_of(data), type, 0) do
+      {^type, body} -> {:ok, body}
+      nil -> :error
+    end
+  end
+
+  # TIFF: the first directory's width (0x0100), length (0x0101) and
+  # orientation (0x0112); a DNGVersion (0xC612) makes it a DNG, whose
+  # first directory is the full image only when its NewSubfileType (0x00FE)
+  # is 0.
+  defp tiff(
+         <<_order::binary-2, _magic::binary-2, _ifd::binary-4, rest::binary>> = head,
+         ifd,
+         endian
+       ) do
+    tags = tiff_tags(head, ifd, endian)
+
+    cond do
+      Map.has_key?(tags, 0xC612) and Map.get(tags, 0x00FE, 0) != 0 ->
+        {"image/x-adobe-dng", nil, nil}
+
+      Map.has_key?(tags, 0xC612) ->
+        Tuple.insert_at(turned(tags), 0, "image/x-adobe-dng")
+
+      # A Canon raw (CR2) is a TIFF too, but no browser's image.
+      match?(<<"CR", _rest::binary>>, rest) ->
+        nil
+
+      true ->
+        Tuple.insert_at(turned(tags), 0, "image/tiff")
+    end
+  end
+
+  defp turned(tags) do
+    {w, h} = {dimension(tags[0x0100]), dimension(tags[0x0101])}
+    if tags[0x0112] in 5..8, do: {h, w}, else: {w, h}
+  end
+
+  # The SHORT and LONG values of a directory's entries, by tag.
+  defp tiff_tags(head, offset, endian) do
+    with <<_skip::binary-size(^offset), count::binary-2, entries::binary>> <- head,
+         count = uint(count, endian),
+         true <- byte_size(entries) >= count * 12 do
+      for i <- 0..(count - 1)//1,
+          <<tag::binary-2, type::binary-2, _count::binary-4, value::binary-4>> =
+            binary_part(entries, i * 12, 12),
+          into: %{},
+          do: {uint(tag, endian), tiff_value(uint(type, endian), value, endian)}
+    else
+      _other -> %{}
+    end
+  end
+
+  defp tiff_value(3, <<short::binary-2, _pad::binary-2>>, endian), do: uint(short, endian)
+  defp tiff_value(4, <<long::little-32>>, :little), do: long
+  defp tiff_value(4, <<long::big-32>>, :big), do: long
+  defp tiff_value(_type, _value, _endian), do: :other
 
   defp webp(
          <<"VP8 ", _size::little-32, _frame::binary-size(3), 0x9D, 0x01, 0x2A, w::little-16,
@@ -473,6 +679,6 @@ defmodule Storehouse.Check do
   defp uint(<<n::little-16>>, :little), do: n
   defp uint(<<n::big-16>>, :big), do: n
 
-  defp dimension(value) when is_integer(value) and value > 0, do: value
+  defp dimension(value) when is_integer(value) and value > 0 and value < 1_000_000, do: value
   defp dimension(_value), do: nil
 end
