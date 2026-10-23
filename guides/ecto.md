@@ -128,6 +128,17 @@ could still roll back): delete them after it commits.
 Storehouse.Ecto.delete_files(Storehouse.Ecto.replaced(changeset, user))
 ```
 
+## A store of the field's own
+
+`store:` keeps a field's files in a store of their own (see "Several
+stores" in the Stores guide): made permanent there, deleted from there.
+
+```elixir
+field :invoice, Storehouse.Ecto.File, store: MyApp.PrivateFiles
+```
+
+`Storehouse.Ecto.store/2` says which store a field has.
+
 ## What a column takes
 
 `Storehouse.Ecto.File` casts a `Storehouse.File` only, never a map of a

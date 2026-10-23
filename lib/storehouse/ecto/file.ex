@@ -19,25 +19,47 @@ if Code.ensure_loaded?(Ecto.Type) do
     file's key comes from Storehouse, never from a browser, so that no one
     puts another's file in their record. Put files with
     `Storehouse.Ecto.put_file/4`.
+
+    ## A store of the field's own
+
+    `store:` names the store the field's files are kept in (a module of
+    `use Storehouse.S3` or `use Storehouse.Local`): `Storehouse.Ecto` makes
+    them permanent there, deletes them from there, and analyzes them from
+    there. The default is `Storehouse.adapter/0`.
+
+        field :invoice, Storehouse.Ecto.File, store: MyApp.PrivateFiles
+        field :scans, {:array, Storehouse.Ecto.File}, store: MyApp.PrivateFiles, default: []
     """
 
-    use Ecto.Type
+    use Ecto.ParameterizedType
 
     @fields ~w(key url name content_type bytes width height checksum preview metadata)a
 
     @impl true
-    def type, do: :map
+    def init(opts), do: %{store: Keyword.get(opts, :store)}
+
+    @doc "The store of a field's files, as `init/1` keeps it: a module, or `nil`."
+    @spec store(map()) :: module() | nil
+    def store(%{store: store}), do: store
+    def store(_params), do: nil
 
     @impl true
-    def cast(%Storehouse.File{} = file), do: {:ok, file}
-    def cast(_other), do: :error
+    def type(_params), do: :map
 
     @impl true
-    def load(%{} = map), do: from_map(map)
-    def load(_other), do: :error
+    def cast(%Storehouse.File{} = file, _params), do: {:ok, file}
+    def cast(nil, _params), do: {:ok, nil}
+    def cast(_other, _params), do: :error
 
     @impl true
-    def dump(%Storehouse.File{} = file) do
+    def load(nil, _loader, _params), do: {:ok, nil}
+    def load(%{} = map, _loader, _params), do: from_map(map)
+    def load(_other, _loader, _params), do: :error
+
+    @impl true
+    def dump(nil, _dumper, _params), do: {:ok, nil}
+
+    def dump(%Storehouse.File{} = file, _dumper, _params) do
       map = file |> Map.take(@fields) |> Map.new(fn {k, v} -> {Atom.to_string(k), v} end)
 
       analysis =
@@ -46,21 +68,22 @@ if Code.ensure_loaded?(Ecto.Type) do
       {:ok, if(analysis == %{}, do: map, else: Map.put(map, "analysis", analysis))}
     end
 
-    def dump(_other), do: :error
+    def dump(_other, _dumper, _params), do: :error
 
     @impl true
-    def embed_as(_format), do: :dump
+    def embed_as(_format, _params), do: :dump
 
     @impl true
     # The same file, with the same metadata and analysis: a caption changed,
     # or a step that ran, is a change.
     def equal?(
           %Storehouse.File{key: key, checksum: sum, metadata: metadata, analysis: analysis},
-          %Storehouse.File{key: key, checksum: sum, metadata: metadata, analysis: analysis}
+          %Storehouse.File{key: key, checksum: sum, metadata: metadata, analysis: analysis},
+          _params
         ),
         do: true
 
-    def equal?(a, b), do: a == b
+    def equal?(a, b, _params), do: a == b
 
     # Each step's analysis; one the column cannot give back is left out.
     defp analysis(%{} = steps) do

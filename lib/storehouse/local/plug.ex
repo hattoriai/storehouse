@@ -16,7 +16,10 @@ defmodule Storehouse.Local.Plug do
 
   ## Options
 
-    * `:at` - the request path of the files. The default is the configured
+    * `:store` - the local store whose files these are: a module of
+      `use Storehouse.Local` (see `Storehouse.Local`), with a root and a
+      prefix of its own. The default is `Storehouse.Local`.
+    * `:at` - the request path of the files. The default is the store's
       `:url_prefix`.
     * `:root` - the directory. The default is the configured `:root`.
     * `:max_age` - the `max-age` of the `Cache-Control` header, in seconds.
@@ -66,11 +69,14 @@ defmodule Storehouse.Local.Plug do
   alias Storehouse.{Check, Local}
 
   @impl Plug
-  def init(opts), do: Keyword.validate!(opts, [:at, :root, max_age: 3600, private: false])
+  def init(opts),
+    do: Keyword.validate!(opts, [:at, :root, store: Local, max_age: 3600, private: false])
 
   @impl Plug
   def call(%Plug.Conn{method: method} = conn, opts) when method in ["GET", "HEAD", "PUT"] do
-    at = split(Keyword.get_lazy(opts, :at, &Local.url_prefix/0))
+    # The store's config, read at each request, as runtime.exs sets it.
+    opts = Keyword.put(opts, :config, opts[:store].config())
+    at = split(Keyword.get_lazy(opts, :at, fn -> Local.url_prefix(opts[:config]) end))
 
     case strip(conn.path_info, at) do
       nil -> conn
@@ -91,8 +97,9 @@ defmodule Storehouse.Local.Plug do
 
   defp serve(conn, segments, opts) do
     with true <- Enum.all?(segments, &Storehouse.valid_segment?/1) || 400,
-         {:ok, disposition} <- signed_get(conn, Enum.join(segments, "/"), opts[:private]),
-         root = opts |> Keyword.get_lazy(:root, &Local.root/0) |> Path.expand(),
+         {:ok, disposition} <- signed_get(conn, Enum.join(segments, "/"), opts),
+         root =
+           opts |> Keyword.get_lazy(:root, fn -> Local.root(opts[:config]) end) |> Path.expand(),
          {:ok, path, size} <- regular_file(root, segments) || 404 do
       send_regular_file(conn, path, size, disposition, opts)
     else
@@ -102,16 +109,16 @@ defmodule Storehouse.Local.Plug do
 
   # A URL the store signed: its disposition, or the type's. With no
   # signature, a file of a store that is not private.
-  defp signed_get(%{query_params: %{"signature" => signature} = params}, key, _private) do
+  defp signed_get(%{query_params: %{"signature" => signature} = params}, key, opts) do
     disposition = Map.get(params, "disposition", "")
+    parts = ["GET", key, params["expires"], disposition]
 
-    if Local.signed?(["GET", key, params["expires"], disposition], params["expires"], signature),
+    if Local.signed?(opts[:config], parts, params["expires"], signature),
       do: {:ok, if(disposition == "", do: nil, else: disposition)},
       else: 403
   end
 
-  defp signed_get(_conn, _key, true), do: 403
-  defp signed_get(_conn, _key, _private), do: {:ok, nil}
+  defp signed_get(_conn, _key, opts), do: if(opts[:private], do: 403, else: {:ok, nil})
 
   defp upload(conn, segments, opts) do
     key = Enum.join(segments, "/")
@@ -121,6 +128,7 @@ defmodule Storehouse.Local.Plug do
     with true <- Enum.all?(segments, &Storehouse.valid_segment?/1) || 400,
          true <-
            Local.signed?(
+             opts[:config],
              ["PUT", key, params["expires"], type, params["bytes"]] ++
                List.wrap(params["checksum"]),
              params["expires"],
@@ -129,8 +137,9 @@ defmodule Storehouse.Local.Plug do
              403,
          {bytes, ""} <- Integer.parse(params["bytes"]),
          true <- content_type(conn) == type || 400,
-         root = opts |> Keyword.get_lazy(:root, &Local.root/0) |> Path.expand(),
-         {:ok, path} <- Local.path(key),
+         root =
+           opts |> Keyword.get_lazy(:root, fn -> Local.root(opts[:config]) end) |> Path.expand(),
+         {:ok, path} <- Local.path(opts[:config], key),
          true <- String.starts_with?(path, root <> "/") || 400,
          false <- File.exists?(path) && 409,
          :ok <- File.mkdir_p(Path.dirname(path)),
