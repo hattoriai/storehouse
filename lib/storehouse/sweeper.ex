@@ -114,21 +114,23 @@ defmodule Storehouse.Sweeper do
           |> Stream.filter(sweep?)
           |> Stream.map(& &1.key)
           |> Stream.chunk_every(1_000)
-          |> Enum.reduce_while({:ok, 0}, fn keys, {:ok, count} ->
-            # Their variants and the CDN's copies go with them.
-            case Storehouse.delete_keys(keys, adapter) do
-              {:ok, deleted} ->
-                Enum.each(keys, &Storehouse.forgotten(&1, adapter))
-                {:cont, {:ok, count + deleted}}
-
-              error ->
-                {:halt, error}
-            end
-          end)
+          |> Enum.reduce_while({:ok, 0}, &deleted(&1, &2, adapter))
         end
 
       {result, %{prefix: prefix, adapter: adapter, result: result}}
     end)
+  end
+
+  # A thousand keys deleted, their variants and the CDN's copies with them.
+  defp deleted(keys, {:ok, count}, adapter) do
+    case Storehouse.delete_keys(keys, adapter) do
+      {:ok, deleted} ->
+        Enum.each(keys, &Storehouse.forgotten(&1, adapter))
+        {:cont, {:ok, count + deleted}}
+
+      error ->
+        {:halt, error}
+    end
   end
 
   @impl GenServer
