@@ -53,7 +53,9 @@ let liveSocket = new LiveSocket("/live", Socket, {
 
 (`"storehouse"` is the package in `deps/storehouse`, as `"phoenix"` and
 `"phoenix_live_view"` are.) With uploaders of your own:
-`{...Uploaders, ...yours}`.
+`{...Uploaders, ...yours}`. Outside a Phoenix app's assets, the same
+JavaScript is on npm: `npm install @hattoriai/storehouse`, and
+`import {Uploaders} from "@hattoriai/storehouse"`.
 
 `allow/3` signs direct uploads when the store does; with a store that
 does not (an adapter of yours with the three callbacks), or with

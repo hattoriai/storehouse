@@ -1,8 +1,13 @@
 {
-  "name": "storehouse",
+  "name": "@hattoriai/storehouse",
   "version": "0.1.0",
   "description": "Files for Phoenix: the uploader of Storehouse's direct uploads for LiveView, and an upload client for any frontend.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hattoriai/storehouse.git"
+  },
+  "homepage": "https://github.com/hattoriai/storehouse",
   "module": "./priv/static/storehouse.js",
   "main": "./priv/static/storehouse.cjs.js",
   "exports": {
@@ -22,5 +27,8 @@
     "priv/static/storehouse-client.d.mts",
     "README.md",
     "LICENSE"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

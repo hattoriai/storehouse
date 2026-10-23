@@ -3,7 +3,7 @@
 // the app's Storehouse.Plug.Presign and Storehouse.Plug.Register (see the
 // guide "Uploads from any client"). No dependencies.
 //
-//     import {createUploadQueue} from "storehouse/client"
+//     import {createUploadQueue} from "storehouse/client"  // "@hattoriai/storehouse/client" from npm
 //
 //     const queue = createUploadQueue({
 //       presignUrl: "/files/presign",
