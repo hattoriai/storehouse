@@ -1,7 +1,7 @@
 defmodule Storehouse.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.2.0"
   @source_url "https://github.com/hattoriai/storehouse"
 
   def project do
@@ -106,6 +106,7 @@ defmodule Storehouse.MixProject do
         "guides/analysis.md",
         "guides/variants.md",
         "guides/background.md",
+        "guides/features.md",
         "CHANGELOG.md"
       ],
       groups_for_modules: [

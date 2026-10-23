@@ -7,6 +7,13 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-23
+
+### Changed
+
+- The README is shorter, and its comparison table plain. Everything
+  Storehouse does is in the new Features guide.
+
 ### Added
 
 - Resumable uploads by the tus protocol (1.0.0, with creation,
