@@ -9,6 +9,16 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Added
 
+- Variants: `Storehouse.variant_url/3` and `Storehouse.variant/3`, by
+  presets only (`Storehouse.Variants`: widths or a ladder of them, a box
+  to fit or fill, a crop's focus, formats chosen by `Accept`, quality,
+  colour profile, metadata), at URLs that change only when their preset
+  does. A renderer (`Storehouse.Renderer`) makes them in the app
+  (`Storehouse.Renderer.Vix`, libvips: never enlarged, turned per EXIF,
+  without metadata), once across a cluster's nodes, stored under
+  `variants/<key>/` and served by `Storehouse.Variants.Plug` for a year;
+  or gives URLs of a service (`Storehouse.Renderer.Imgproxy`, signed), or
+  is the app's own. Deleting an original deletes its variants.
 - Placeholders: `Storehouse.Analyzer.Placeholder`, a step that makes a
   photograph's placeholder while it loads (a tiny WebP, JPEG or PNG as a
   data URI) and its average colour, with libvips through Vix (optional),

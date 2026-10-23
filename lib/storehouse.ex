@@ -1197,12 +1197,17 @@ defmodule Storehouse do
     end
   end
 
-  @doc "Deletes the file with `key`, through the adapter (`:adapter`, or `adapter/0`)."
+  @doc """
+  Deletes the file with `key`, through the adapter (`:adapter`, or
+  `adapter/0`), and its stored variants (`Storehouse.Variants`), where the
+  store lists files.
+  """
   @spec delete(Storehouse.Adapter.key(), keyword()) :: :ok | {:error, term()}
   def delete(key, opts \\ []) do
     adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
 
     with :ok <- span(:delete, %{key: key, adapter: adapter}, fn -> adapter.delete(key) end) do
+      Storehouse.Variants.delete(key, adapter: adapter)
       Storehouse.Notify.notify(:deleted, %{key: key}, opts)
     end
   end
@@ -1320,6 +1325,8 @@ defmodule Storehouse do
       end)
 
     with {:ok, count} <- result do
+      Storehouse.Variants.delete(prefix, adapter: adapter)
+
       Storehouse.Notify.notify(:deleted, %{prefix: prefix, count: count}, opts)
       {:ok, count}
     end
@@ -1428,6 +1435,21 @@ defmodule Storehouse do
   defp outcome({:ok, _other}), do: %{result: :ok}
   defp outcome(:ok), do: %{result: :ok}
   defp outcome({:error, reason}), do: %{result: :error, reason: reason}
+
+  @doc """
+  The URL of `file`'s variant of a preset: a thumbnail, one size of a
+  `srcset`. See `Storehouse.Variants.url/3`.
+  """
+  @spec variant_url(Storehouse.File.t() | String.t(), atom(), keyword()) :: String.t()
+  def variant_url(file, preset, opts \\ []), do: Storehouse.Variants.url(file, preset, opts)
+
+  @doc """
+  `file`'s variant of a preset, found or made once, however many ask for
+  it: `{:ok, %Storehouse.File{}}`. See `Storehouse.Variants.get/3`.
+  """
+  @spec variant(Storehouse.File.t() | String.t(), atom(), keyword()) ::
+          {:ok, Storehouse.File.t()} | {:error, term()}
+  def variant(file, preset, opts \\ []), do: Storehouse.Variants.get(file, preset, opts)
 
   @doc "Returns the URL of the file with `key`, through the adapter (`:adapter`, or `adapter/0`)."
   @spec url(Storehouse.Adapter.key(), keyword()) :: String.t()
