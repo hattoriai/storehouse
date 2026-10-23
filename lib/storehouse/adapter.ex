@@ -58,14 +58,17 @@ defmodule Storehouse.Adapter do
   @typedoc """
   What Storehouse knows of the file: `:name` (the client's name, for
   display only), `:content_type` (checked on the server, `Storehouse.Check`),
-  `:bytes`, and `:checksum` (its SHA-256, in Base64), which a store that
-  can checks as it takes the file (`Storehouse.S3` does).
+  `:bytes`, `:checksum` (its SHA-256, in Base64), which a store that
+  can checks as it takes the file (`Storehouse.S3` does), and
+  `:cache_control`, the `Cache-Control` a store that keeps headers serves
+  it with.
   """
   @type meta :: %{
           optional(:name) => String.t(),
           optional(:content_type) => String.t(),
           optional(:bytes) => non_neg_integer(),
-          optional(:checksum) => String.t()
+          optional(:checksum) => String.t(),
+          optional(:cache_control) => String.t()
         }
 
   @doc """
@@ -116,13 +119,15 @@ defmodule Storehouse.Adapter do
 
   @typedoc """
   What a store knows of a file without reading it: its size in `:bytes`,
-  its `:content_type` as stored (or `nil`), and its `:checksum`, the
-  SHA-256 in Base64 (or `nil` when the store keeps none).
+  its `:content_type` as stored (or `nil`), its `:checksum`, the SHA-256
+  in Base64 (or `nil` when the store keeps none), and when it was last
+  written, `:modified_at`, where the store says.
   """
   @type head :: %{
-          bytes: non_neg_integer(),
-          content_type: String.t() | nil,
-          checksum: String.t() | nil
+          required(:bytes) => non_neg_integer(),
+          required(:content_type) => String.t() | nil,
+          required(:checksum) => String.t() | nil,
+          optional(:modified_at) => DateTime.t() | nil
         }
 
   @doc """

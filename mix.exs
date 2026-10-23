@@ -166,7 +166,8 @@ defmodule Storehouse.MixProject do
         Cleanup: [Storehouse.Sweeper],
         Events: [Storehouse.Notify, Storehouse.Notify.PubSub],
         Tests: [Storehouse.Memory, Storehouse.Test],
-        "Private files": [Storehouse.Redirect],
+        "Private files": [Storehouse.Redirect, Storehouse.Proxy],
+        "A CDN in front": [Storehouse.Purge, Storehouse.Purge.Cloudflare],
         "Any client": [Storehouse.Batch, Storehouse.Plug.Presign, Storehouse.Plug.Register],
         LiveView: [Storehouse.Live, Storehouse.Live.Writer],
         Ecto: [Storehouse.Ecto, Storehouse.Ecto.File]

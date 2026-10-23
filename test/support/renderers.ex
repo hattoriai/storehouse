@@ -26,3 +26,15 @@ defmodule StorehouseTest.Renderers do
       do: "https://images.example.com/#{variant.preset}/#{variant.width}/#{file.key}"
   end
 end
+
+defmodule StorehouseTest.Purger do
+  @moduledoc false
+  # A CDN that tells the test what it is asked to forget.
+  @behaviour Storehouse.Purge
+
+  @impl true
+  def purge(request, opts) do
+    send(Keyword.fetch!(opts, :test), {:purged, request})
+    Keyword.get(opts, :result, :ok)
+  end
+end

@@ -51,6 +51,36 @@ The URL your records keep is then `"/files/" <> file.key`, not the
 file's `url` (with `Storehouse.Local`, keep its `url_prefix` the plug's
 path, apart from the redirect's: signed URLs are made on it).
 
+## Through the app: Storehouse.Proxy
+
+`Storehouse.Redirect` sends the person to the bucket. `Storehouse.Proxy`
+checks the person the same way, then streams the file from the store
+through the app, so the bucket's address never leaves it:
+
+```elixir
+forward "/files", Storehouse.Proxy, authorize: &MyAppWeb.Files.allowed?/2
+```
+
+It reads the file a part at a time (4 MiB by default), so a large file
+never sits in memory. It answers a `Range` with `206`, and sends an `ETag`
+(from the file's SHA-256) and `Last-Modified`, so a browser that still has
+the file gets `304` and no byte is read. It uses the same passive headers
+as `Storehouse.Local.Plug`. Use it when the bucket must stay out of sight,
+when the files go through a CDN that cannot sign, or when a store's
+signed URLs are not wanted at all.
+
+A file only some may see is sent with
+`Cache-Control: private, max-age=0, must-revalidate` by default, so that a
+CDN never keeps it for someone else. For a public bucket kept behind the
+app, let everyone in and let the CDN keep the files:
+
+```elixir
+forward "/files", Storehouse.Proxy,
+  authorize: true,
+  cache_control: "public, max-age=31536000, immutable",
+  cache_tag: true
+```
+
 ## Disposition
 
 A signed URL can name a download (`filename:`), or ask for one

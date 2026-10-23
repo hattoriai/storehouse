@@ -269,7 +269,13 @@ defmodule Storehouse.Memory do
   @impl Storehouse.Adapter
   def head(key) do
     with :ok <- failure(:head), :ok <- valid(key), {:ok, file} <- found(key) do
-      {:ok, %{bytes: byte_size(file.body), content_type: file.content_type, checksum: sha(file)}}
+      {:ok,
+       %{
+         bytes: byte_size(file.body),
+         content_type: file.content_type,
+         checksum: sha(file),
+         modified_at: file.modified_at
+       }}
     end
   end
 

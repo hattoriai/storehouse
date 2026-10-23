@@ -61,6 +61,61 @@ people reach it, and the plug serves the file at that path under the
 root. `forward` cannot take a path with a dynamic segment, so use a `get`
 route (`alias: false` keeps the scope's alias off the module).
 
+## A CDN in front
+
+A CDN (Cloudflare, Fastly, CloudFront) keeps a file close to its readers.
+Storehouse's keys are never reused, so a stored file never changes: tell
+the CDN and the browser to keep it for a year.
+
+```elixir
+config :storehouse, Storehouse.S3,
+  bucket: "my-app-uploads",
+  # …
+  public_url: "https://files.example.com",
+  cache_control: "public, max-age=31536000, immutable"
+```
+
+The bucket then keeps that `Cache-Control` with every file and serves it
+with it, however the file came in: stored, uploaded from the browser (the
+header is signed, so add `cache-control` to the bucket's CORS
+`AllowedHeaders`), streamed in, or promoted from the cache. A call's
+`:cache_control` (`Storehouse.store/2`, `Storehouse.presign_upload/4`)
+takes the store's place for one file. `Storehouse.Local.Plug` has
+`cache_control:` of its own, and `Storehouse.Variants.Plug` sends a year
+already.
+
+### Forgetting a file deleted
+
+A file never changes, but it can go: a person deletes a photograph, or
+their account. A CDN that keeps it for a year would go on serving it.
+`Storehouse.Purge` tells the CDN, after each `Storehouse.delete/2`, which
+URLs to forget: the file's own, its variants', and those of your routes.
+
+```elixir
+config :storehouse, Storehouse.Purge,
+  purger:
+    {Storehouse.Purge.Cloudflare,
+     zone_id: System.fetch_env!("CLOUDFLARE_ZONE_ID"),
+     api_token: System.fetch_env!("CLOUDFLARE_API_TOKEN")},
+  base_url: "https://example.com",
+  urls: &["https://example.com/files/#{&1}"]
+```
+
+The purge runs as a job of the app's runner, and is retried until the CDN
+answers. Its job holds the URLs; the token is read from the config when it
+runs, so it is never stored in a job table. Deleting the files under a
+prefix (an account's) gives the prefix's URLs, for a CDN that purges by
+prefix (`by: [:urls, :prefixes]` on Cloudflare's Enterprise plan).
+
+**By tag.** With `cache_tag: true`, `Storehouse.Proxy`,
+`Storehouse.Variants.Plug` and `Storehouse.Local.Plug` send each file's
+`Cache-Tag`, and its variants are sent with their original's.
+`by: [:tags]` then forgets a file and all of its variants in one request,
+whatever URLs they were served at.
+
+A CDN without an API that Storehouse knows takes a purger of your own: a
+module of `Storehouse.Purge` with one function, `purge/2`.
+
 ## Your page's CSP
 
 If your app sends a `Content-Security-Policy`, allow the files' origin in

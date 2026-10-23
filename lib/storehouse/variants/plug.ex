@@ -30,6 +30,9 @@ defmodule Storehouse.Variants.Plug do
       or a function of the key. The default is every key with a preset's
       name, width and fingerprint: originals that must stay private
       (served only at signed URLs) are left out with it.
+    * `:cache_tag` - `true` sends the original's `Cache-Tag`
+      (`Storehouse.Purge.cache_tag/1`) with each of its variants, for a
+      purge by tag.
     * `:adapter` - the store. The default is `Storehouse.adapter/0`.
     * The configuration's (`:presets`, `:renderer`, `:prefix`).
   """
@@ -84,6 +87,9 @@ defmodule Storehouse.Variants.Plug do
       accept = conn |> get_req_header("accept") |> Enum.join(",")
       adapter = Keyword.get_lazy(opts, :adapter, &Storehouse.adapter/0)
       call_opts = Keyword.take(opts, [:presets, :renderer, :prefix, :timeout])
+
+      # Tagged with the original's key: a purge of it forgets its variants.
+      conn = Storehouse.Purge.put_cache_tag(conn, opts[:cache_tag], key)
 
       key
       |> Variants.get(preset.name, call_opts ++ [width: width, accept: accept, adapter: adapter])

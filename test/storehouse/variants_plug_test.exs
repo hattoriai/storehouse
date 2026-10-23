@@ -45,6 +45,15 @@ defmodule Storehouse.VariantsPlugTest do
     assert head.resp_body == ""
   end
 
+  test "tagged with its original's cache tag, when asked", %{original: file} do
+    url = Storehouse.variant_url(file, :thumb, @opts)
+
+    assert get(url, [], Keyword.put(@opts, :cache_tag, true)) |> get_resp_header("cache-tag") ==
+             [Storehouse.Purge.cache_tag(file.key)]
+
+    assert get(url) |> get_resp_header("cache-tag") == []
+  end
+
   test "in the format the browser takes", %{original: file} do
     url = Storehouse.variant_url(file, :photo, Keyword.put(@opts, :width, 320))
 

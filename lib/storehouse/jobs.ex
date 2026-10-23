@@ -87,6 +87,29 @@ defmodule Storehouse.Jobs.Archive do
   end
 end
 
+defmodule Storehouse.Jobs.Purge do
+  @moduledoc false
+  # What a CDN forgets of a file deleted (`Storehouse.Purge`). Its
+  # arguments hold the URLs, tags and prefixes; the purger and its
+  # credentials are read from the config when it runs.
+  @behaviour Storehouse.Job
+
+  @doc false
+  def job(request) do
+    args = %{
+      "urls" => request.urls,
+      "tags" => request.tags,
+      "prefixes" => request.prefixes
+    }
+
+    Storehouse.Job.new(__MODULE__, args, max_attempts: 10)
+  end
+
+  @impl Storehouse.Job
+  def perform(%{"urls" => urls, "tags" => tags, "prefixes" => prefixes}),
+    do: Storehouse.Purge.run(%{urls: urls, tags: tags, prefixes: prefixes})
+end
+
 defmodule Storehouse.Jobs.Warm do
   @moduledoc false
   # A file's sizes made before a visitor asks for them
