@@ -24,4 +24,6 @@ if url = System.get_env("DATABASE_URL") do
   """)
 end
 
+{:ok, _memory} = Storehouse.Memory.start_link()
+
 ExUnit.start(exclude: exclude)

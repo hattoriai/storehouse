@@ -101,6 +101,7 @@ defmodule Storehouse.MixProject do
         Files: [Storehouse, Storehouse.File, Storehouse.Check, Storehouse.ReadError],
         Stores: [Storehouse.Adapter, Storehouse.Local, Storehouse.Local.Plug, Storehouse.S3],
         Cleanup: [Storehouse.Cleaner],
+        Tests: [Storehouse.Memory, Storehouse.Test],
         "Private files": [Storehouse.Redirect],
         LiveView: [Storehouse.Live, Storehouse.Live.Writer],
         Ecto: [Storehouse.Ecto, Storehouse.Ecto.File]

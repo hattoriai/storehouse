@@ -25,6 +25,12 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   the store answers, and sweeps the temporary files older than a day on
   stores with no lifecycle rules (`:sweep`, one node of a cluster at a
   time; `Storehouse.Cleaner.sweep/1` at once).
+- `Storehouse.Memory`, a store in memory for tests: every callback, each
+  test's files its own (`checkout/0`, `allow/2`, `$callers`) so async
+  tests never share them, `fail_next/2` for error paths, and
+  `put_upload/2` for the browser's part of a direct upload.
+  `Storehouse.Test`: `assert_stored/1`, `refute_stored/1` and
+  `stored_files/0`.
 
 ### Changed
 
