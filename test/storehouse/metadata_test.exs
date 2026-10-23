@@ -142,7 +142,7 @@ defmodule Storehouse.MetadataTest do
       # Elixir's JSON (1.18 and later), and Jason.
       for library <- Enum.filter([JSON, Jason], &Code.ensure_loaded?/1),
           json = library.encode!(file) do
-        decoded = Jason.decode!(json)
+        decoded = Storehouse.JSON.decode!(json)
         assert decoded["url"] == "/uploads/2026/10/a.jpg"
         assert decoded["metadata"] == %{"caption" => "Quay"}
         refute Map.has_key?(decoded, "analysis")
