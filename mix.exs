@@ -170,7 +170,13 @@ defmodule Storehouse.MixProject do
         "A CDN in front": [Storehouse.Purge, Storehouse.Purge.Cloudflare],
         "Any client": [Storehouse.Batch, Storehouse.Plug.Presign, Storehouse.Plug.Register],
         LiveView: [Storehouse.Live, Storehouse.Live.Writer],
-        Ecto: [Storehouse.Ecto, Storehouse.Ecto.File]
+        Ecto: [Storehouse.Ecto, Storehouse.Ecto.File],
+        "A library of files": [
+          Storehouse.Ecto.Blob,
+          Storehouse.Ecto.Blob.Schema,
+          Storehouse.Ecto.Usage,
+          Storehouse.Ecto.Migrations
+        ]
       ]
     ]
   end
