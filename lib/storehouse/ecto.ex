@@ -49,7 +49,8 @@ if Code.ensure_loaded?(Ecto.Changeset) do
       not_accepted: "is not a type that is accepted",
       too_large: "is too large",
       not_stored: "could not be stored",
-      not_owner: "is not a file of this owner"
+      not_owner: "is not a file of this owner",
+      too_many: "has too many files"
     }
 
     @doc """
@@ -64,11 +65,14 @@ if Code.ensure_loaded?(Ecto.Changeset) do
       * `:owner` - the owner the files must belong to
         (`Storehouse.owns?/2`): a file under another's prefix is an error
         of the field, so that a record never takes another's file.
+      * `:max_files` - for a list field, the most files it holds.
       * `:adapter` - the store, to make it permanent. The default is
         `Storehouse.adapter/0`.
 
     A file over a limit, or of a type not taken, is an error of the field
-    (`validation: :storehouse`, with the `:reason`).
+    (`validation: :storehouse`, with the `:reason`). For a list field,
+    `add_files/4` adds to the files the record has, and `remove_file/3`
+    takes one away.
     """
     @spec put_file(
             Ecto.Changeset.t(),
@@ -77,10 +81,66 @@ if Code.ensure_loaded?(Ecto.Changeset) do
             keyword()
           ) ::
             Ecto.Changeset.t()
-    def put_file(changeset, field, file_or_files, opts \\ []) do
-      changeset = put_change(changeset, field, file_or_files)
+    def put_file(changeset, field, file_or_files, opts \\ []),
+      do: put_checked(changeset, field, file_or_files, List.wrap(file_or_files), opts)
 
-      case Enum.find_value(List.wrap(file_or_files), &refusal(&1, opts)) do
+    @doc """
+    Adds files to those of a list field, after the files the record has:
+    each checked as `put_file/4` checks it, with the same options, and made
+    permanent when the record is saved. `:max_files` counts them all.
+
+        user
+        |> change()
+        |> Storehouse.Ecto.add_files(:photos, uploaded, accept: Storehouse.Check.images(), max_files: 20)
+        |> then(&Storehouse.Ecto.update(Repo, &1))
+    """
+    @spec add_files(
+            Ecto.Changeset.t(),
+            atom(),
+            Storehouse.File.t() | [Storehouse.File.t()],
+            keyword()
+          ) :: Ecto.Changeset.t()
+    def add_files(changeset, field, file_or_files, opts \\ []) do
+      added = List.wrap(file_or_files)
+      put_checked(changeset, field, (get_field(changeset, field) || []) ++ added, added, opts)
+    end
+
+    @doc """
+    Takes the file with `key` (or the file given) out of `field`: from a
+    list field, or a single one, which is then `nil`. `update/3` deletes it
+    from the store once the record is saved. A field without it is left as
+    it is.
+
+        user
+        |> change()
+        |> Storehouse.Ecto.remove_file(:photos, key)
+        |> then(&Storehouse.Ecto.update(Repo, &1))
+    """
+    @spec remove_file(Ecto.Changeset.t(), atom(), Storehouse.File.t() | Storehouse.Adapter.key()) ::
+            Ecto.Changeset.t()
+    def remove_file(changeset, field, %Storehouse.File{key: key}),
+      do: remove_file(changeset, field, key)
+
+    def remove_file(changeset, field, key) when is_binary(key) do
+      case get_field(changeset, field) do
+        files when is_list(files) ->
+          if Enum.any?(files, &(&1.key == key)),
+            do: put_change(changeset, field, Enum.reject(files, &(&1.key == key))),
+            else: changeset
+
+        %Storehouse.File{key: ^key} ->
+          put_change(changeset, field, nil)
+
+        _other ->
+          changeset
+      end
+    end
+
+    # The value put in the field; the files of it checked, those that are new.
+    defp put_checked(changeset, field, value, checked, opts) do
+      changeset = put_change(changeset, field, value)
+
+      case too_many(value, opts[:max_files]) || Enum.find_value(checked, &refusal(&1, opts)) do
         nil ->
           prepare_changes(changeset, &promote_field(&1, field, opts))
 
@@ -88,6 +148,11 @@ if Code.ensure_loaded?(Ecto.Changeset) do
           add_error(changeset, field, @messages[reason], validation: :storehouse, reason: reason)
       end
     end
+
+    defp too_many(files, max) when is_list(files) and is_integer(max) and length(files) > max,
+      do: :too_many
+
+    defp too_many(_value, _max), do: nil
 
     @doc """
     Merges `metadata` into the metadata of the file in `field`
