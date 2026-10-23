@@ -105,7 +105,13 @@ defmodule Storehouse.MixProject do
         "CHANGELOG.md"
       ],
       groups_for_modules: [
-        Files: [Storehouse, Storehouse.File, Storehouse.Check, Storehouse.ReadError],
+        Files: [
+          Storehouse,
+          Storehouse.File,
+          Storehouse.Check,
+          Storehouse.ReadError,
+          Storehouse.Zip
+        ],
         Stores: [
           Storehouse.Adapter,
           Storehouse.Local,

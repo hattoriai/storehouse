@@ -397,6 +397,30 @@ read. A stream reads each chunk as it is taken, and raises
 `Storehouse.ReadError` when the store fails halfway; `download/3` gives
 that error as `{:error, reason}`, and leaves nothing at the path.
 
+## A zip of files
+
+An export of an account's files, a folder to download: `Storehouse.Zip`
+makes a zip of stored files and the app's own as a stream, with nothing
+on the disk and no more than a chunk in memory, past 4 GB too (ZIP64).
+
+```elixir
+entries = [
+  {"README.txt", "Your photographs, as of 23 October 2026.\n"}
+  | for(photo <- photos, do: {"photos/" <> photo.name, {:stored, photo.key}})
+]
+
+# Its size before it is made: "3.2 GB, 1,204 photographs".
+{:ok, bytes} = Storehouse.Zip.size(entries)
+
+# Into the store as it is made (S3's multipart upload), then a link to it.
+{:ok, zip} = Storehouse.Zip.store(entries, "exports/42/2026-10-23.zip")
+{:ok, url} = Storehouse.signed_url(zip, expires_in: 86_400, disposition: :attachment)
+```
+
+`Storehouse.Zip.stream/2` gives the same zip as a stream, for a response
+sent in chunks. A name is a path in the zip, never outside it: `..`, a
+leading `/` and a backslash are refused.
+
 ## Files from an address
 
 `Storehouse.fetch/2` downloads a file and stores it: an image pasted by
