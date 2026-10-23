@@ -12,6 +12,7 @@ if Code.ensure_loaded?(Ecto.Adapters.Postgres) do
       field(:name, :string)
       field(:avatar, Storehouse.Ecto.File)
       field(:photos, {:array, Storehouse.Ecto.File}, default: [])
+      field(:invoice, Storehouse.Ecto.File, store: StorehouseTest.PrivateFiles)
     end
   end
 end

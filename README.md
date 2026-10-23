@@ -48,7 +48,8 @@ It gives your app:
   an adapter refuses any key that could leave its root;
 * **stores**: the local disk, and S3 with the stores that speak its API
   (Cloudflare R2, MinIO, Tigris, LocalStack), with no other library; or
-  one of your own, in three callbacks;
+  one of your own, in three callbacks; and as many of each as you need
+  (`use Storehouse.S3`), a store per Ecto field;
 * **uploads straight to the store**: the browser sends a file to the
   bucket at a URL your app signed (its type, its size, ten minutes), so a
   large file never goes through your app, and Storehouse checks it there
@@ -71,7 +72,9 @@ It gives your app:
   should not show, and byte ranges, for video;
 * **uploads from any client** (React, Vue, a native app, Uppy): JSON
   endpoints that presign and register files in batches, one result per
-  file, the room shared by the batch;
+  file, the room shared by the batch, and `storehouse/client`, the
+  browser's part: checksums in a Web Worker, a few uploads at once,
+  progress, and registration in batches;
 * **LiveView uploads, stored**: `Storehouse.Live.consume/3` stores each
   finished entry once, cancels those the upload refused, and gives you a
   result for each;
@@ -233,13 +236,13 @@ another library is welcome as an issue.
 | LiveView uploads | Yes | No | No | Partly | No |
 | Reading a file back | Yes | Yes | Yes | Yes | Yes |
 | A file's own metadata | Yes, kept apart from the analysis's | No | Yes | Yes | Yes, shared with the analysis's |
-| Several stores at once | Not yet ([#1](https://github.com/hattoriai/storehouse/issues/1)) | Per uploader | Per file | Yes | One at a time |
+| Several stores at once | Yes: named stores, a store per field | Per uploader | Per file | Yes | One at a time |
 | Work after the upload, analysis | Yes: steps of your own, in a process of your app's or in Oban | No | No | Yes | Yes, on Oban |
 | Variants | Not yet ([#6](https://github.com/hattoriai/storehouse/issues/6)) | Made at upload | No | Yes | On demand |
 | Placeholders while an image loads | Not yet ([#4](https://github.com/hattoriai/storehouse/issues/4)) | No | No | Yes | No |
 | A table of files | Not yet ([#16](https://github.com/hattoriai/storehouse/issues/16)) | No | No | Yes | Yes |
 | The same file uploaded again is the one kept | Yes: before the upload, and when it is verified | No | No | No | No |
-| Endpoints and a client for frontends without LiveView | Endpoints: yes, in batches. Client: not yet ([#11](https://github.com/hattoriai/storehouse/issues/11)) | No | No | Presign and complete | No |
+| Endpoints and a client for frontends without LiveView | Yes: endpoints in batches, and a JavaScript client | No | No | Presign and complete | No |
 | Resumable and multipart uploads from the browser | Not yet ([#12](https://github.com/hattoriai/storehouse/issues/12)) | No | No | No | No |
 | A store in memory, for async tests | Yes, with assertions | No | Yes | Yes | No |
 | Dependencies | None | Req, ImageMagick | None | Several | Oban, Vix |
@@ -254,8 +257,6 @@ another library is welcome as an issue.
   by comparing the app's records with the store.
 * **Resumable uploads** that survive a reconnect (and the tus protocol),
   and multipart uploads straight from the browser, for very large files.
-* **A JavaScript client for any frontend**: an upload queue with checksums
-  in a Web Worker, progress and batched registration, for the endpoints.
 * **Mirror**: writing to two stores at once, for migrating between them.
 * **Proxy mode**: streaming private bucket files through the app, for a
   CDN in front.

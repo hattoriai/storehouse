@@ -86,6 +86,13 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   `storehouse` there is another's), published from CI when a release is
   published, with provenance; a Phoenix app imports it from
   `deps/storehouse` as before.
+- Several stores: `use Storehouse.S3` and `use Storehouse.Local` define a
+  store of the app's own, with its config under its name (or another
+  app's, `otp_app:`), usable wherever a store is (`adapter:`). An Ecto
+  field's `store:` (`Storehouse.Ecto.File` is now a parameterized type)
+  makes its files permanent, deletes them and analyzes them there;
+  `Storehouse.Ecto.store/2`. `Storehouse.Local.Plug`'s `:store` serves a
+  second local store.
 - Uploads from any client: `Storehouse.Batch.presign/2` and `register/2`
   sign and check a batch of uploads straight to the store, one result per
   file (`{:ok, _}`, `{:existing, file}` or `{:error, code}`), the room
@@ -94,6 +101,13 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   JSON, with the owner, the room and the files the app has asked of
   functions of the conn, and the app's own JSON of its records from
   `:then`.
+- `storehouse/client`, in the npm package: the browser's part of uploads
+  from any client (`createUploadQueue`), for the presign and register
+  plugs, with no dependencies. Each file's SHA-256 read in a Web Worker
+  and sent with its presign, the files added together presigned in one
+  request, a few sent at once and each tried again on a network error or
+  the store's 5xx, registered in batches; a result, progress and cancel
+  for each. Types in `storehouse-client.d.mts`.
 
 ### Changed
 
