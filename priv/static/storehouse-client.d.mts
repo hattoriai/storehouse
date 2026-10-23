@@ -5,7 +5,11 @@ export interface QueueOptions {
   presignUrl: string
   /** The app's Storehouse.Plug.Register. */
   registerUrl: string
-  /** Sent with each request to the app: a CSRF token, an authorization. */
+  /**
+   * Sent with each request to the app: an authorization, a CSRF token. The
+   * page's `<meta name="csrf-token">` is sent as `x-csrf-token` unless this
+   * has one.
+   */
   headers?: Record<string, string>
   /** Uploads to the store at once. Default 4. */
   concurrency?: number

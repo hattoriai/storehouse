@@ -279,3 +279,32 @@ test("a large file the app has is not sent; a small one goes whole", async () =>
   assert.equal((await queue.add(file("a.jpg", "abc")).result).status, "registered");
   assert.equal(small.calls.presign.length, 1);
 });
+
+test("sends the page's CSRF token from its meta tag, unless the app gives one", async () => {
+  const sent = [];
+  const realFetch = globalThis.fetch;
+  globalThis.document = { querySelector: (s) => (s === 'meta[name="csrf-token"]' ? { getAttribute: () => "from-meta" } : null) };
+  globalThis.fetch = async (url, init) => {
+    sent.push(init.headers);
+    return { ok: true, json: async () => ({ uploads: JSON.parse(init.body).uploads.map(() => ({ error: "not_accepted" })) }) };
+  };
+
+  try {
+    const presign = async (headers) => {
+      const queue = createUploadQueue({ presignUrl: "/presign", registerUrl: "/register", checksum: false, ...(headers && { headers }) });
+      await queue.add(file("a.jpg", "aaa")).result;
+    };
+
+    await presign();
+    await presign({ "X-CSRF-Token": "given" });
+    await presign({ authorization: "Bearer t" });
+
+    assert.equal(sent[0]["x-csrf-token"], "from-meta");
+    assert.equal(sent[1]["X-CSRF-Token"], "given");
+    assert.equal(sent[1]["x-csrf-token"], undefined);
+    assert.deepEqual([sent[2]["x-csrf-token"], sent[2].authorization], ["from-meta", "Bearer t"]);
+  } finally {
+    delete globalThis.document;
+    globalThis.fetch = realFetch;
+  }
+});
