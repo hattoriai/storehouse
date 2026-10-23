@@ -50,6 +50,8 @@ defmodule Storehouse.MixProject do
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false},
       # Storehouse.Ecto: files in a record's column. Optional.
       {:ecto, "~> 3.12", optional: true},
+      # Storehouse.File as JSON with Jason, beside Elixir's own JSON. Optional.
+      {:jason, "~> 1.4", optional: true},
       {:ecto_sql, "~> 3.12", only: :test},
       {:postgrex, "~> 0.19", only: :test},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},

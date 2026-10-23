@@ -170,4 +170,60 @@ defmodule Storehouse.EctoTest do
     changeset = cast(%User{}, params, [:avatar])
     assert {"is invalid", _} = changeset.errors[:avatar]
   end
+
+  test "metadata is kept in the column, and a change to it is a change", %{root: root} do
+    {:ok, user} =
+      %User{}
+      |> changeset(%{name: "Ana"}, upload("harbour.jpg"))
+      |> then(&Storehouse.Ecto.insert(Repo, &1))
+
+    assert user.avatar.metadata == %{}
+
+    {:ok, user} =
+      user
+      |> change()
+      |> Storehouse.Ecto.put_metadata(:avatar, %{caption: "The quay", credit: %{name: "Ana"}})
+      |> Repo.update()
+
+    loaded = Repo.get!(User, user.id)
+    assert loaded.avatar.metadata == %{"caption" => "The quay", "credit" => %{"name" => "Ana"}}
+    assert there?(root, loaded.avatar)
+
+    changeset = loaded |> change() |> Storehouse.Ecto.put_metadata(:avatar, %{bad: {1}})
+    refute changeset.valid?
+
+    assert [avatar: {_message, [validation: :storehouse, reason: {:invalid_metadata, ["bad"]}]}] =
+             changeset.errors
+
+    # A list field, by the file's key.
+    {:ok, user} =
+      loaded
+      |> change()
+      |> Storehouse.Ecto.put_file(:photos, [upload("harbour.jpg"), upload("small.png")])
+      |> then(&Storehouse.Ecto.update(Repo, &1))
+
+    [_first, second] = user.photos
+
+    {:ok, user} =
+      user
+      |> change()
+      |> Storehouse.Ecto.put_metadata(:photos, second.key, %{alt: "A small square"})
+      |> Repo.update()
+
+    assert [%{metadata: %{}}, %{metadata: %{"alt" => "A small square"}}] =
+             Repo.get!(User, user.id).photos
+  end
+
+  test "a file saved before metadata existed loads with none" do
+    {:ok, user} =
+      %User{}
+      |> changeset(%{name: "Old"}, upload("small.png"))
+      |> then(&Storehouse.Ecto.insert(Repo, &1))
+
+    Repo.query!("UPDATE storehouse_users SET avatar = avatar - 'metadata' WHERE id = $1", [
+      user.id
+    ])
+
+    assert Repo.get!(User, user.id).avatar.metadata == %{}
+  end
 end

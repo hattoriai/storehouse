@@ -3,7 +3,7 @@ if Code.ensure_loaded?(Ecto.Type) do
     @moduledoc """
     An Ecto type for a stored file (`Storehouse.File`) in a record's column:
     a map (`jsonb` in PostgreSQL) of its key, URL, name, type, size,
-    checksum, width and height. No table of files: the record has its file.
+    checksum, width, height and metadata (`Storehouse.Metadata`). No table of files: the record has its file.
 
         schema "users" do
           field :avatar, Storehouse.Ecto.File
@@ -22,7 +22,7 @@ if Code.ensure_loaded?(Ecto.Type) do
 
     use Ecto.Type
 
-    @fields ~w(key url name content_type bytes width height checksum preview)a
+    @fields ~w(key url name content_type bytes width height checksum preview metadata)a
 
     @impl true
     def type, do: :map
@@ -45,10 +45,11 @@ if Code.ensure_loaded?(Ecto.Type) do
     def embed_as(_format), do: :dump
 
     @impl true
-    def equal?(%Storehouse.File{key: key, checksum: sum}, %Storehouse.File{
-          key: key,
-          checksum: sum
-        }),
+    # The same file, with the same metadata: a caption changed is a change.
+    def equal?(
+          %Storehouse.File{key: key, checksum: sum, metadata: metadata},
+          %Storehouse.File{key: key, checksum: sum, metadata: metadata}
+        ),
         do: true
 
     def equal?(a, b), do: a == b
@@ -63,7 +64,11 @@ if Code.ensure_loaded?(Ecto.Type) do
            is_integer(fields.bytes),
          do:
            {:ok,
-            struct!(Storehouse.File, %{fields | name: fields.name || Path.basename(fields.key)})},
+            struct!(Storehouse.File, %{
+              fields
+              | name: fields.name || Path.basename(fields.key),
+                metadata: if(is_map(fields.metadata), do: fields.metadata, else: %{})
+            })},
          else: :error
     end
   end
