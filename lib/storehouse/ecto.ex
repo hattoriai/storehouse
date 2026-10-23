@@ -253,8 +253,8 @@ if Code.ensure_loaded?(Ecto.Changeset) do
     @doc """
     Runs the analysis steps of the files in `field` out of the request
     (`Storehouse.analyze_later/3`), then saves their results in the
-    record's column: only the `"analyzed"` part of each file's metadata,
-    in a transaction that locks the row, so that what the app changed in
+    record's column: only each file's analysis, the steps that ran
+    merged into what it had, in a transaction that locks the row, so that what the app changed in
     the meantime stays. A file no longer in the record, or a record
     deleted, is left as it is.
 
@@ -289,7 +289,7 @@ if Code.ensure_loaded?(Ecto.Changeset) do
 
     @doc false
     # The analysis of a file, saved in its record's column: only the file's
-    # "analyzed" metadata, on the row as it is now.
+    # analysis, on the row as it is now.
     def save_analyzed(%Storehouse.File{} = analyzed, repo, schema, id, field) do
       [primary] = schema.__schema__(:primary_key)
       query = Ecto.Query.from(r in schema, where: field(r, ^primary) == ^id, lock: "FOR UPDATE")
@@ -316,12 +316,8 @@ if Code.ensure_loaded?(Ecto.Changeset) do
 
     defp with_analysis(_value, _analyzed), do: :gone
 
-    defp keep_analysis(file, analyzed) do
-      case analyzed.metadata["analyzed"] do
-        nil -> file
-        analysis -> %{file | metadata: Map.put(file.metadata || %{}, "analyzed", analysis)}
-      end
-    end
+    defp keep_analysis(file, analyzed),
+      do: %{file | analysis: Map.merge(file.analysis || %{}, analyzed.analysis || %{})}
 
     @doc """
     `repo.delete/2`, then the record's files are deleted from the store.
