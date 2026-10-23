@@ -54,6 +54,14 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   `:analyze`, save the results in the record's column. A span per step,
   `[:storehouse, :analyze, ...]`. `Storehouse.Analyzer.Size`, a step that
   asks the store a file's real size and type.
+- Files of an owner: `:owner` on `store/2`, `presign_upload/4`,
+  `verify_upload/2`, `Storehouse.Live.allow/3` and `consume/3`, and
+  `Storehouse.Ecto.put_file/4`, puts keys under the owner's prefix and
+  refuses another's (`:not_owner`); `Storehouse.owns?/2` and
+  `owner_key/2`. `:room` refuses a file larger than the room left
+  (`:storage_full`): at presign by the size declared, at `verify_upload/2`
+  by the size the store gives. `Storehouse.usage/2` counts an owner's
+  files in the store.
 - What happens to files, told as it happens (`Storehouse.Notify`): `:stored`
   (`store/2`, `verify_upload/2`), `:analyzed` (with the steps that ran;
   later analysis once the app's `:then` has it), `:failed` (a step, with
@@ -72,12 +80,11 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 - A file with a HEIF `ftyp` box was `application/octet-stream`; it is now
   `image/heic`, `image/heif` or `image/avif`.
-- Storehouse's JSON is in one place, `Storehouse.JSON`: the app's
+- Storehouse's JSON is in one place, a module of its own: the app's
   `config :storehouse, :json_library`, else Elixir's own `JSON` when it
   is there, else Jason. No other part of it calls a JSON library.
 - Storehouse takes Elixir 1.17 (with Jason, which 1.17 needs for JSON),
   and CI tests it there too.
-
 - `Storehouse.Ecto.delete_files/2` (and so `update/3` and `delete/3`)
   deletes through `Storehouse.delete_later/2`: retried by the cleaner when
   it runs, at once as before when it does not.

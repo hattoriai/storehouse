@@ -48,7 +48,8 @@ if Code.ensure_loaded?(Ecto.Changeset) do
     @messages %{
       not_accepted: "is not a type that is accepted",
       too_large: "is too large",
-      not_stored: "could not be stored"
+      not_stored: "could not be stored",
+      not_owner: "is not a file of this owner"
     }
 
     @doc """
@@ -60,6 +61,9 @@ if Code.ensure_loaded?(Ecto.Changeset) do
 
       * `:accept` - the types the field takes (`Storehouse.Check.images()`).
       * `:max_bytes`, `:max_pixels` - the limits.
+      * `:owner` - the owner the files must belong to
+        (`Storehouse.owns?/2`): a file under another's prefix is an error
+        of the field, so that a record never takes another's file.
       * `:adapter` - the store, to make it permanent. The default is
         `Storehouse.adapter/0`.
 
@@ -139,11 +143,15 @@ if Code.ensure_loaded?(Ecto.Changeset) do
       pixels = if is_integer(file.width), do: file.width * (file.height || 0)
 
       cond do
+        not owned?(file, opts[:owner]) -> :not_owner
         is_list(opts[:accept]) and file.content_type not in opts[:accept] -> :not_accepted
         over?(file.bytes, opts[:max_bytes]) or over?(pixels, opts[:max_pixels]) -> :too_large
         true -> nil
       end
     end
+
+    defp owned?(_file, nil), do: true
+    defp owned?(file, owner), do: Storehouse.owns?(owner, file.key)
 
     defp over?(value, max), do: is_integer(value) and is_integer(max) and value > max
 

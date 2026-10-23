@@ -110,6 +110,16 @@ defmodule Storehouse.LiveTest do
       assert File.read!(Path.join(root, upload.key)) == data
     end
 
+    test "is an owner's: signed under its prefix, and checked to be its", %{root: root} do
+      {:ok, view, _html} = live(build_conn(), "/direct/accounts-42")
+      data = File.read!(Path.join(@fixtures, "harbour.jpg"))
+      upload = upload_direct(view, "harbour.jpg", data, "image/jpeg")
+
+      assert "accounts-42/" <> _rest = upload.key
+      assert render(view) =~ "harbour.jpg: image/jpeg 1200x800 #{upload.key}"
+      assert File.exists?(Path.join(root, upload.key))
+    end
+
     test "is deleted from the store when its bytes are not what it said", %{root: root} do
       {:ok, view, _html} = live(build_conn(), "/direct")
 

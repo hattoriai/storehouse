@@ -85,6 +85,10 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
         the record that has them is saved (`Storehouse.Ecto`).
       * `:key` - a function of the name and the claimed type that gives
         the key, as for `Storehouse.store/2`.
+      * `:owner` and `:room` - as for `Storehouse.store/2`: the keys under
+        the owner's prefix, and, with `:direct`, a file larger than the
+        room refused before it is uploaded. Give `consume/3` the same, to
+        check the files the browser sent.
       * `:types`, `:max_pixels` - with `:stream`, the checked types taken
         and the pixels at most, checked as the file comes. (With the other
         modes, give `consume/3` its `:accept` and `:max_pixels`.)
@@ -94,13 +98,23 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
     @spec allow(Socket.t(), atom() | String.t(), keyword()) :: Socket.t()
     def allow(%Socket{} = socket, upload_name, opts) do
       {own, upload} =
-        Keyword.split(opts, [:mode, :adapter, :key, :cache, :expires_in, :types, :max_pixels])
+        Keyword.split(opts, [
+          :mode,
+          :adapter,
+          :key,
+          :owner,
+          :room,
+          :cache,
+          :expires_in,
+          :types,
+          :max_pixels
+        ])
 
       adapter = Keyword.get_lazy(own, :adapter, &Storehouse.adapter/0)
 
       case Keyword.get_lazy(own, :mode, fn -> default_mode(adapter) end) do
         :direct ->
-          presign = Keyword.take(own, [:adapter, :key, :cache, :expires_in])
+          presign = Keyword.take(own, [:adapter, :key, :owner, :room, :cache, :expires_in])
 
           allow_upload(
             socket,
@@ -111,7 +125,7 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
         :stream ->
           writer =
             own
-            |> Keyword.take([:adapter, :key, :cache, :max_pixels])
+            |> Keyword.take([:adapter, :key, :owner, :cache, :max_pixels])
             |> Keyword.put(:accept, own[:types])
 
           allow_upload(

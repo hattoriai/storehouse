@@ -108,6 +108,13 @@ defmodule Storehouse do
     * `:adapter` - the store. The default is `adapter/0`.
     * `:key` - a function of the name and the checked content type that
       gives the key. The default is `&key/2`.
+    * `:owner` - whose file it is, for an app whose files belong to
+      someone (an account, a workspace): its key is put under the owner's
+      prefix, `"<owner>/…"` (`owner_key/2`). A string of key segments
+      (`"accounts/42"`) or an integer.
+    * `:room` - how many bytes the owner may still store: a larger file
+      gives `{:error, :storage_full}`, and is not stored. The default is
+      no limit.
     * `:analyze` - analysis steps (`Storehouse.Analyzer`) to run once the
       file is stored, from `path`, with no download: the file comes with
       their results. A step that fails keeps why, and the file is stored
@@ -144,6 +151,7 @@ defmodule Storehouse do
 
     with {:ok, metadata} <- initial_metadata(opts),
          {:ok, description} <- Check.describe(path, claim, opts),
+         :ok <- fits(description.bytes, opts[:room]),
          :ok <- accepted(description.content_type, Keyword.get(opts, :accept)),
          {:ok, key} <- new_key(opts, name, description.content_type),
          checksum = checksum(path),
@@ -201,11 +209,107 @@ defmodule Storehouse do
   # The key of a new file: the `:key` function's, or `key/2`'s; under the
   # temporary prefix with `cache: true`.
   defp new_key(opts, name, content_type) do
-    case Keyword.get(opts, :key, &key/2).(name, content_type) do
-      key when is_binary(key) -> {:ok, if(opts[:cache], do: cache_prefix() <> key, else: key)}
+    with key when is_binary(key) <- Keyword.get(opts, :key, &key/2).(name, content_type),
+         {:ok, key} <- under_owner(key, opts[:owner]) do
+      {:ok, if(opts[:cache], do: cache_prefix() <> key, else: key)}
+    else
+      {:error, _reason} = error -> error
       other -> {:error, {:invalid_key, other}}
     end
   end
+
+  defp under_owner(key, nil), do: {:ok, key}
+
+  defp under_owner(key, owner) do
+    with {:ok, prefix} <- owner_prefix(owner), do: {:ok, prefix <> "/" <> key}
+  end
+
+  defp owner_prefix(owner) when is_integer(owner) and owner >= 0,
+    do: {:ok, Integer.to_string(owner)}
+
+  defp owner_prefix(owner) when is_binary(owner) do
+    prefix = String.trim(owner, "/")
+    if valid_key?(prefix), do: {:ok, prefix}, else: {:error, :invalid_owner}
+  end
+
+  defp owner_prefix(_owner), do: {:error, :invalid_owner}
+
+  @doc """
+  The key `key` would have under `owner`'s prefix: `"<owner>/<key>"`, as
+  `store/2` and `presign_upload/4` make it with `:owner`.
+
+  ## Examples
+
+      iex> Storehouse.owner_key("accounts/42", "2026/10/a.png")
+      {:ok, "accounts/42/2026/10/a.png"}
+
+      iex> Storehouse.owner_key("../42", "a.png")
+      {:error, :invalid_owner}
+
+  """
+  @spec owner_key(String.t() | non_neg_integer(), Storehouse.Adapter.key()) ::
+          {:ok, Storehouse.Adapter.key()} | {:error, :invalid_owner}
+  def owner_key(owner, key), do: under_owner(key, owner)
+
+  @doc """
+  Whether `key` is one of `owner`'s files: under its prefix, as `:owner`
+  puts it, temporary (`cache: true`) or permanent. Check a key a browser
+  sends back before you take it, so that no one claims another's file.
+  `verify_upload/2` and `Storehouse.Ecto.put_file/4` check it with
+  `:owner`.
+
+  ## Examples
+
+      iex> Storehouse.owns?("accounts/42", "accounts/42/2026/10/a.png")
+      true
+
+      iex> Storehouse.owns?("accounts/42", "accounts/421/2026/10/a.png")
+      false
+
+      iex> Storehouse.owns?(42, "cache/42/2026/10/a.png")
+      true
+
+      iex> Storehouse.owns?("accounts/42", "accounts/42/../7/a.png")
+      false
+
+  """
+  @spec owns?(String.t() | non_neg_integer(), Storehouse.Adapter.key()) :: boolean()
+  def owns?(owner, key) when is_binary(key) do
+    with {:ok, prefix} <- owner_prefix(owner),
+         true <- valid_key?(key) do
+      key |> String.replace_prefix(cache_prefix(), "") |> String.starts_with?(prefix <> "/")
+    else
+      _not -> false
+    end
+  end
+
+  def owns?(_owner, _key), do: false
+
+  @doc """
+  What `owner`'s files take in the store, counted from the store itself
+  (`list/2`): `{:ok, %{bytes: bytes, files: count}}`. A store of many files
+  lists them all: an app that keeps its files in records sums them there,
+  and this checks it.
+  """
+  @spec usage(String.t() | non_neg_integer(), keyword()) ::
+          {:ok, %{bytes: non_neg_integer(), files: non_neg_integer()}} | {:error, term()}
+  def usage(owner, opts \\ []) do
+    with {:ok, prefix} <- owner_prefix(owner),
+         {:ok, entries} <- list(prefix <> "/", opts) do
+      {:ok,
+       Enum.reduce(entries, %{bytes: 0, files: 0}, fn entry, acc ->
+         %{bytes: acc.bytes + entry.bytes, files: acc.files + 1}
+       end)}
+    end
+  rescue
+    error in Storehouse.ReadError -> {:error, error.reason}
+  end
+
+  # A file of `bytes` in the room left: `:storage_full` when it does not fit.
+  defp fits(_bytes, nil), do: :ok
+  defp fits(_bytes, :infinity), do: :ok
+  defp fits(bytes, room) when is_integer(room) and bytes <= room, do: :ok
+  defp fits(_bytes, _room), do: {:error, :storage_full}
 
   @doc """
   The prefix of the keys of temporary files (`cache: true`): `"cache/"`,
@@ -337,6 +441,9 @@ defmodule Storehouse do
     * `:max_bytes` - a larger file gives `{:error, :too_large}` at once.
     * `:expires_in` - how long the browser has to start the upload, in
       seconds. The default is 600.
+    * `:owner` and `:room`, as for `store/2`: the key under the owner's
+      prefix, and a file larger than the room left refused at once, with
+      `{:error, :storage_full}`.
     * `:adapter` and `:key`, as for `store/2`. The adapter must sign
       uploads (`c:Storehouse.Adapter.presign_upload/3`): `Storehouse.Local`
       and `Storehouse.S3` do; another gives `{:error, :not_supported}`.
@@ -356,6 +463,7 @@ defmodule Storehouse do
   defp do_presign_upload(name, type, bytes, adapter, opts) do
     with :ok <- supported(adapter, :presign_upload, 3),
          :ok <- accepted(type, Keyword.get(opts, :accept)),
+         :ok <- fits(bytes, opts[:room]),
          :ok <-
            if(is_integer(opts[:max_bytes]) and bytes > opts[:max_bytes],
              do: {:error, :too_large},
@@ -381,6 +489,12 @@ defmodule Storehouse do
 
     * `:name` - the file's name, for display. The default is the key's.
     * `:metadata` - as for `store/2`.
+    * `:owner` - the owner the file must belong to (`owns?/2`): a key
+      under another's prefix gives `{:error, :not_owner}`, and the file
+      there is left as it is.
+    * `:room` - the bytes the owner may still store, against the size the
+      store gives (not the one the browser declared): a larger file gives
+      `{:error, :storage_full}`, and is deleted.
     * `:accept`, `:max_bytes`, `:max_pixels`, `:adapter`, as for
       `store/2`.
     * `:preview` - as for `store/2`, with `nil` for the path: the file is
@@ -404,9 +518,13 @@ defmodule Storehouse do
     signed = Check.content_type(Path.extname(key))
 
     with true <- valid_key?(key) || {:error, :invalid_key},
+         # Another's file is refused, and left as it is.
+         true <- (is_nil(opts[:owner]) or owns?(opts[:owner], key)) || {:error, :not_owner},
          {:ok, metadata} <- initial_metadata(opts),
          :ok <- supported(adapter, :read_head, 2),
          {:ok, head, size} <- adapter.read_head(key, Check.head_size()),
+         # The size the browser declared is a claim: the store says.
+         :ok <- discarded(fits(size, opts[:room]), adapter, key),
          {:ok, description} <-
            checked(Check.describe_head(head, size, signed, opts), signed, opts, adapter, key) do
       file = %Storehouse.File{
@@ -424,6 +542,9 @@ defmodule Storehouse do
       {:ok, preview(file, nil, Keyword.get(opts, :preview))}
     end
   end
+
+  defp discarded(:ok, _adapter, _key), do: :ok
+  defp discarded(error, adapter, key), do: discard(adapter, key, error)
 
   defp stored_checksum(adapter, key) do
     with :ok <- supported(adapter, :checksum, 1),
