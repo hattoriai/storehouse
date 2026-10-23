@@ -194,6 +194,13 @@ defmodule Storehouse.CopyTest do
     end
 
     test "a mirror that fails never fails the primary, and catches up when it is back" do
+      # As many attempts as it takes: the mirror is back when the test says.
+      stop_supervised!(Storehouse.Runner.Memory)
+
+      start_supervised!(
+        {Storehouse.Runner.Memory, backoff: fn _attempt -> 20 end, max_attempts: 10_000}
+      )
+
       Flaky.down()
       {:ok, file} = Storehouse.store(@harbour, adapter: Mirrored)
       assert {:ok, _head} = Storehouse.head(file.key, adapter: PrivateFiles)
