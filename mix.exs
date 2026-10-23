@@ -64,7 +64,8 @@ defmodule Storehouse.MixProject do
       {:phoenix_live_view, "~> 1.1", optional: true},
       {:plug, "~> 1.15"},
       {:telemetry, "~> 1.0"},
-      # The placeholders (Storehouse.Analyzer.Placeholder, ThumbHash, BlurHash): libvips. Optional.
+      # The placeholders (Storehouse.Analyzer.Placeholder, ThumbHash, BlurHash)
+      # and Storehouse.Renderer.Vix: libvips. Optional.
       {:vix, "~> 0.31", optional: true},
       # A web server for the tests of fetch/2.
       {:bandit, "~> 1.5", only: :test},
@@ -103,6 +104,7 @@ defmodule Storehouse.MixProject do
         "guides/private_files.md",
         "guides/ecto.md",
         "guides/analysis.md",
+        "guides/variants.md",
         "guides/background.md",
         "CHANGELOG.md"
       ],
@@ -142,6 +144,14 @@ defmodule Storehouse.MixProject do
           Storehouse.JPEG,
           Storehouse.PNG,
           Storehouse.WebP
+        ],
+        Variants: [
+          Storehouse.Variants,
+          Storehouse.Variants.Plug,
+          Storehouse.Variant,
+          Storehouse.Renderer,
+          Storehouse.Renderer.Vix,
+          Storehouse.Renderer.Imgproxy
         ],
         "Work out of the request": [
           Storehouse.Runner,

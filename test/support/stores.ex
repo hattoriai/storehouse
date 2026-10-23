@@ -56,3 +56,8 @@ defmodule StorehouseTest.MirroredInOban do
     mirrors: [StorehouseTest.Flaky],
     runner: {Storehouse.Runner.Oban, name: StorehouseTest.Oban}
 end
+
+defmodule StorehouseTest.Shared do
+  @moduledoc "A local store two nodes share, for the tests of a cluster."
+  use Storehouse.Local
+end
