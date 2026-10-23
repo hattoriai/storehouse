@@ -62,6 +62,13 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   (`:storage_full`): at presign by the size declared, at `verify_upload/2`
   by the size the store gives. `Storehouse.usage/2` counts an owner's
   files in the store.
+- What happens to files, told as it happens (`Storehouse.Notify`): `:stored`
+  (`store/2`, `verify_upload/2`), `:analyzed` (with the steps that ran;
+  later analysis once the app's `:then` has it), `:failed` (a step, with
+  why) and `:deleted` (a key, or a prefix and its count), to the app's
+  `config :storehouse, notify: {module, function, args}`, or a call's
+  `notify:`. `Storehouse.Notify.PubSub` broadcasts them on the app's
+  `Phoenix.PubSub`, on a topic of the app's.
 - The images of cameras and phones, checked by their bytes: HEIC and
   HEIF, AVIF (the primary image's size, cropped and turned as its `clap`
   and `irot` say), TIFF in either byte order (turned as its orientation
