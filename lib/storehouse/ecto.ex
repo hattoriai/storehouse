@@ -43,6 +43,8 @@ if Code.ensure_loaded?(Ecto.Changeset) do
 
     import Ecto.Changeset
 
+    require Ecto.Query
+
     @messages %{
       not_accepted: "is not a type that is accepted",
       too_large: "is too large",
@@ -208,7 +210,14 @@ if Code.ensure_loaded?(Ecto.Changeset) do
     """
     @spec insert(module(), Ecto.Changeset.t(), keyword()) ::
             {:ok, struct()} | {:error, Ecto.Changeset.t()}
-    def insert(repo, changeset, opts \\ []), do: repo.insert(changeset, opts)
+    def insert(repo, changeset, opts \\ []) do
+      {analyze, opts} = Keyword.pop(opts, :analyze, [])
+
+      with {:ok, saved} <- repo.insert(changeset, opts) do
+        unless repo.in_transaction?(), do: analyze_new(repo, changeset.data, saved, analyze, opts)
+        {:ok, saved}
+      end
+    end
 
     @doc """
     `repo.update/2`, then the files it replaced or removed are deleted from
@@ -218,9 +227,99 @@ if Code.ensure_loaded?(Ecto.Changeset) do
     @spec update(module(), Ecto.Changeset.t(), keyword()) ::
             {:ok, struct()} | {:error, Ecto.Changeset.t()}
     def update(repo, changeset, opts \\ []) do
+      {analyze, opts} = Keyword.pop(opts, :analyze, [])
+
       with {:ok, saved} <- repo.update(changeset, opts) do
-        unless repo.in_transaction?(), do: delete_files(replaced(changeset, saved), opts)
+        unless repo.in_transaction?() do
+          delete_files(replaced(changeset, saved), opts)
+          analyze_new(repo, changeset.data, saved, analyze, opts)
+        end
+
         {:ok, saved}
+      end
+    end
+
+    # The files of each field to analyze that the save put there.
+    defp analyze_new(repo, before, saved, analyze, opts) do
+      for {field, steps} <- analyze do
+        known = MapSet.new(List.wrap(Map.get(before, field)), & &1.key)
+        new = Enum.reject(List.wrap(Map.get(saved, field)), &MapSet.member?(known, &1.key))
+        analyze_files(repo, saved, field, new, steps, opts)
+      end
+
+      :ok
+    end
+
+    @doc """
+    Runs the analysis steps of the files in `field` out of the request
+    (`Storehouse.analyze_later/3`), then saves their results in the
+    record's column: only the `"analyzed"` part of each file's metadata,
+    in a transaction that locks the row, so that what the app changed in
+    the meantime stays. A file no longer in the record, or a record
+    deleted, is left as it is.
+
+        Storehouse.Ecto.analyze_later(Repo, user, :avatar, [MyApp.Analyzers.Colors])
+
+    `insert/3` and `update/3` do it for the files a save puts in a field,
+    with `analyze: [avatar: steps]`.
+
+    Takes the options of `Storehouse.analyze_later/3` but `:then`
+    (`:runner`, `:oban`, `:force`, `:max_bytes`, `:adapter`).
+    """
+    @spec analyze_later(module(), struct(), atom(), [Storehouse.Analyzer.step()], keyword()) ::
+            :ok
+    def analyze_later(repo, %_{} = record, field, steps, opts \\ []) do
+      analyze_files(repo, record, field, List.wrap(Map.get(record, field)), steps, opts)
+      :ok
+    end
+
+    defp analyze_files(repo, %schema{} = record, field, files, steps, opts) do
+      [primary] = schema.__schema__(:primary_key)
+      id = Map.fetch!(record, primary)
+      later = Keyword.take(opts, [:runner, :oban, :force, :max_bytes, :adapter])
+
+      for file <- files,
+          do:
+            Storehouse.analyze_later(
+              file,
+              steps,
+              Keyword.put(later, :then, {__MODULE__, :save_analyzed, [repo, schema, id, field]})
+            )
+    end
+
+    @doc false
+    # The analysis of a file, saved in its record's column: only the file's
+    # "analyzed" metadata, on the row as it is now.
+    def save_analyzed(%Storehouse.File{} = analyzed, repo, schema, id, field) do
+      [primary] = schema.__schema__(:primary_key)
+      query = Ecto.Query.from(r in schema, where: field(r, ^primary) == ^id, lock: "FOR UPDATE")
+
+      repo.transaction(fn ->
+        with %_{} = record <- repo.one(query),
+             value = Map.get(record, field),
+             {:ok, updated} <- with_analysis(value, analyzed) do
+          record |> change(%{field => updated}) |> repo.update!()
+        end
+      end)
+
+      :ok
+    end
+
+    defp with_analysis(%Storehouse.File{key: key} = file, %Storehouse.File{key: key} = analyzed),
+      do: {:ok, keep_analysis(file, analyzed)}
+
+    defp with_analysis(files, %Storehouse.File{key: key} = analyzed) when is_list(files) do
+      if Enum.any?(files, &(&1.key == key)),
+        do: {:ok, Enum.map(files, &if(&1.key == key, do: keep_analysis(&1, analyzed), else: &1))},
+        else: :gone
+    end
+
+    defp with_analysis(_value, _analyzed), do: :gone
+
+    defp keep_analysis(file, analyzed) do
+      case analyzed.metadata["analyzed"] do
+        nil -> file
+        analysis -> %{file | metadata: Map.put(file.metadata || %{}, "analyzed", analysis)}
       end
     end
 

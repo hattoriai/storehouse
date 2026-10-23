@@ -52,7 +52,9 @@ defmodule Storehouse.MixProject do
       {:ecto, "~> 3.12", optional: true},
       # Storehouse.File as JSON with Jason, beside Elixir's own JSON. Optional.
       {:jason, "~> 1.4", optional: true},
-      {:ecto_sql, "~> 3.12", only: :test},
+      # Storehouse.analyze_later/3 with runner: :oban. Optional.
+      {:oban, "~> 2.19", optional: true},
+      {:ecto_sql, "~> 3.12", optional: true},
       {:postgrex, "~> 0.19", only: :test},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       # The LiveView test client, for Storehouse.Live's tests.
@@ -97,11 +99,18 @@ defmodule Storehouse.MixProject do
         "guides/direct_uploads.md",
         "guides/private_files.md",
         "guides/ecto.md",
+        "guides/analysis.md",
         "CHANGELOG.md"
       ],
       groups_for_modules: [
         Files: [Storehouse, Storehouse.File, Storehouse.Check, Storehouse.ReadError],
         Stores: [Storehouse.Adapter, Storehouse.Local, Storehouse.Local.Plug, Storehouse.S3],
+        Analysis: [
+          Storehouse.Analyzer,
+          Storehouse.Analyzer.Size,
+          Storehouse.Tasks,
+          Storehouse.Oban.Analyze
+        ],
         Cleanup: [Storehouse.Cleaner],
         Tests: [Storehouse.Memory, Storehouse.Test],
         "Private files": [Storehouse.Redirect],
