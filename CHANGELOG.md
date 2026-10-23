@@ -7,6 +7,15 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+### Security
+
+- Storehouse takes plug_crypto 2.2.1 or later, for EEF-CVE-2026-105963
+  (GHSA-ffw9-w85g-f2vh): with an argument of the wrong type,
+  `Plug.Crypto`'s functions could write the secret they were given to the
+  logs, in the stack trace. Storehouse's own call
+  (`Storehouse.Local.signed?/4`) gives it binaries only, but an app that
+  updates Storehouse now gets the fixed plug_crypto too.
+
 ### Added
 
 - Resumable uploads by the tus protocol (1.0.0, with creation,

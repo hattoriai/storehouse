@@ -63,6 +63,9 @@ defmodule Storehouse.MixProject do
       # rest of Storehouse works as it is.
       {:phoenix_live_view, "~> 1.1", optional: true},
       {:plug, "~> 1.15"},
+      # Storehouse.Local's signatures (Plug.Crypto.secure_compare/2); 2.2.1
+      # and later, for EEF-CVE-2026-105963, in the apps that use Storehouse.
+      {:plug_crypto, "~> 2.2 and >= 2.2.1"},
       {:telemetry, "~> 1.0"},
       # The placeholders (Storehouse.Analyzer.Placeholder, ThumbHash, BlurHash)
       # and Storehouse.Renderer.Vix: libvips. Optional.
