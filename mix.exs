@@ -168,6 +168,12 @@ defmodule Storehouse.MixProject do
         Tests: [Storehouse.Memory, Storehouse.Test],
         "Private files": [Storehouse.Redirect, Storehouse.Proxy],
         "A CDN in front": [Storehouse.Purge, Storehouse.Purge.Cloudflare],
+        "Resumable uploads (tus)": [
+          Storehouse.Tus.Plug,
+          Storehouse.Tus,
+          Storehouse.Tus.State,
+          Storehouse.Tus.State.ETS
+        ],
         "Any client": [
           Storehouse.Batch,
           Storehouse.Plug.Presign,

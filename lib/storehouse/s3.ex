@@ -137,6 +137,10 @@ defmodule Storehouse.S3 do
         do: Storehouse.S3.multipart_sign(config(), key, upload_id, number, opts)
 
       @impl true
+      def multipart_put(key, upload_id, number, body),
+        do: Storehouse.S3.multipart_put(config(), key, upload_id, number, body)
+
+      @impl true
       def multipart_parts(key, upload_id),
         do: Storehouse.S3.multipart_parts(config(), key, upload_id)
 
@@ -545,6 +549,19 @@ defmodule Storehouse.S3 do
         )
 
       {:ok, %{method: "PUT", url: URI.to_string(signed), headers: headers}}
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def multipart_put(key, upload_id, number, body),
+    do: multipart_put(config(), key, upload_id, number, body)
+
+  @doc false
+  def multipart_put(c, key, upload_id, number, body) do
+    with {:ok, uri} <- object_uri(c, key),
+         {:ok, {^number, etag, checksum}} <-
+           upload_part(%{config: c, uri: uri, upload_id: upload_id}, number, body) do
+      {:ok, %{number: number, etag: etag, bytes: byte_size(body), checksum: checksum}}
     end
   end
 

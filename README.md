@@ -62,7 +62,9 @@ It gives your app:
 * **very large files in parts**, from the browser straight to the bucket,
   a few at a time, each checked by its checksum and tried again on its
   own, carried on from where they stopped after a reload, then put
-  together and checked by the app;
+  together and checked by the app; or through the app by the tus
+  protocol, for the clients that speak it (Uppy, tus-js-client, mobile),
+  into the bucket a part at a time;
 * **uploads streamed through your app** with no file on its disk: to S3
   in the parts of a multipart upload as the chunks come, checked by their
   first bytes on the way, two parts in flight from a process of their
@@ -292,7 +294,7 @@ another library is welcome as an issue.
 | A table of files | Yes, optional: a library of files many records use, the same file one row, deletion refused while in use | No | No | Yes | Yes |
 | The same file uploaded again is the one kept | Yes: before the upload, and when it is verified | No | No | No | No |
 | Endpoints and a client for frontends without LiveView | Yes: endpoints in batches, and a JavaScript client | No | No | Presign and complete | No |
-| Resumable and multipart uploads from the browser | Multipart straight to the bucket, resumed after a reload; tus not yet ([#12](https://github.com/hattoriai/storehouse/issues/12)) | No | No | No | No |
+| Resumable and multipart uploads from the browser | Yes: multipart straight to the bucket, resumed after a reload, and tus through the app | No | No | No | No |
 | A store in memory, for async tests | Yes, with assertions | No | Yes | Yes | No |
 | Dependencies | None (Vix for placeholders and variants) | Req, ImageMagick | None | Several | Oban, Vix |
 
@@ -302,8 +304,6 @@ another library is welcome as an issue.
   length and size, audio; metadata of the app's own, read again later.
 * **Cleanup of unused files**: the files no record uses any more, found
   by comparing the app's records with the store.
-* **The tus protocol**, for clients that speak it and stores without
-  multipart uploads.
 * **Azure and native Google Cloud Storage**: Google Cloud Storage works
   through its S3-compatible API today.
 

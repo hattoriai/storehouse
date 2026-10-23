@@ -7,7 +7,13 @@ defmodule Storehouse.Plug.Batch do
 
   @functions [:owner, :room, :existing]
 
+  # Options already made (a server that calls init/1 again) are kept as
+  # they are.
   def init(opts, own) do
+    if Keyword.has_key?(opts, :batch), do: opts, else: split(opts, own)
+  end
+
+  defp split(opts, own) do
     {mine, batch} = Keyword.split(opts, own ++ @functions)
     Keyword.put(mine, :batch, batch)
   end

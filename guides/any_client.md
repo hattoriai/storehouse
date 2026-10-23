@@ -192,6 +192,48 @@ them: give the bucket a lifecycle rule that aborts them
             "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1}}]}
 ```
 
+## tus, through the app
+
+[tus](https://tus.io) is an open protocol of resumable uploads, with
+clients for the browser (Uppy's Tus plugin, tus-js-client), iOS, Android
+and the desktop. `Storehouse.Tus.Plug` is a tus server (1.0.0, with
+creation, creation-with-upload, termination and expiration):
+
+```elixir
+# lib/my_app/application.ex: the uploads in progress
+children = [MyApp.Repo, Storehouse.Tus, MyAppWeb.Endpoint]
+
+# lib/my_app_web/router.ex, behind your authentication
+forward "/files/tus", Storehouse.Tus.Plug,
+  owner: &MyAppWeb.Files.owner/1,
+  room: &MyAppWeb.Files.room/1,
+  accept: ["video/mp4", "video/quicktime"],
+  max_bytes: 20_000_000_000,
+  then: &MyAppWeb.Files.uploaded/2
+```
+
+```javascript
+import Uppy from "@uppy/core"
+import Tus from "@uppy/tus"
+
+new Uppy().use(Tus, {endpoint: "/files/tus", headers: {"x-csrf-token": csrfToken}})
+```
+
+The bytes go through the app, unlike the routes above, so tus suits
+clients that speak it already, and stores the browser cannot send to
+straight (the local disk). A connection lost halfway carries on from the
+last byte the app has. On S3, they go into the bucket's multipart upload
+a part at a time as they come, with nothing on the app's disk; on the
+local disk, into a file stored when it is whole. Either way the file is
+checked as every upload is, its claimed type and size when it is
+created, its type by its first bytes when it is whole. `:then` is given
+the stored file, to save it in a record.
+
+The uploads in progress are kept in ETS, one node's; behind a load
+balancer of several nodes, keep them in your database with a module of
+`Storehouse.Tus.State` given as `state:`. Those not finished in a day
+(`:expires_in`) are given up, their bytes with them.
+
 ## Uppy
 
 Uppy's [AWS S3 plugin](https://uppy.io/docs/aws-s3/) asks for one file's
