@@ -114,6 +114,35 @@ defmodule Storehouse.Adapter do
   @callback read_head(key(), bytes :: pos_integer()) ::
               {:ok, head :: binary(), size :: non_neg_integer()} | {:error, term()}
 
+  @typedoc """
+  What a store knows of a file without reading it: its size in `:bytes`,
+  its `:content_type` as stored (or `nil`), and its `:checksum`, the
+  SHA-256 in Base64 (or `nil` when the store keeps none).
+  """
+  @type head :: %{
+          bytes: non_neg_integer(),
+          content_type: String.t() | nil,
+          checksum: String.t() | nil
+        }
+
+  @doc """
+  What the store knows of the file with `key`, without reading it: to
+  learn its size before a byte of it is read (`Storehouse.head/2`). A
+  missing file gives `{:error, :enoent}`. Optional, with
+  `c:read_range/3`.
+  """
+  @callback head(key()) :: {:ok, head()} | {:error, term()}
+
+  @doc """
+  The bytes of the file with `key` from `first` to `last`, both included
+  (fewer, when the file ends sooner; `""` past its end): what
+  `Storehouse.read/2`, `Storehouse.stream/2` and `Storehouse.download/3`
+  read the file with, a part at a time. A missing file gives
+  `{:error, :enoent}`. Optional, with `c:head/1`.
+  """
+  @callback read_range(key(), first :: non_neg_integer(), last :: non_neg_integer()) ::
+              {:ok, binary()} | {:error, term()}
+
   @doc """
   The SHA-256 of the file with `key`, in Base64, as the store knows it, or
   `nil` when it keeps none: for a file uploaded straight to it. Optional.
@@ -148,6 +177,8 @@ defmodule Storehouse.Adapter do
   @optional_callbacks presign_upload: 3,
                       signed_url: 2,
                       read_head: 2,
+                      head: 1,
+                      read_range: 3,
                       checksum: 1,
                       copy: 2,
                       stream_open: 2,

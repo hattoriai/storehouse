@@ -98,7 +98,7 @@ defmodule Storehouse.MixProject do
         "CHANGELOG.md"
       ],
       groups_for_modules: [
-        Files: [Storehouse, Storehouse.File, Storehouse.Check],
+        Files: [Storehouse, Storehouse.File, Storehouse.Check, Storehouse.ReadError],
         Stores: [Storehouse.Adapter, Storehouse.Local, Storehouse.Local.Plug, Storehouse.S3],
         "Private files": [Storehouse.Redirect],
         LiveView: [Storehouse.Live, Storehouse.Live.Writer],

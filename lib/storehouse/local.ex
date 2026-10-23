@@ -47,6 +47,8 @@ defmodule Storehouse.Local do
 
   @behaviour Storehouse.Adapter
 
+  alias Storehouse.Check
+
   @default_prefix "/uploads"
 
   @impl Storehouse.Adapter
@@ -174,6 +176,33 @@ defmodule Storehouse.Local do
     else
       {:ok, %File.Stat{}} -> {:error, :enoent}
       error -> error
+    end
+  end
+
+  # The local disk keeps no type: a key's extension is its checked type's
+  # (`Storehouse.key/2`), as the plug serves it.
+  @impl Storehouse.Adapter
+  def head(key) do
+    with {:ok, path} <- path(key),
+         {:ok, %File.Stat{size: size, type: :regular}} <- File.stat(path) do
+      {:ok, %{bytes: size, content_type: Check.content_type(Path.extname(key)), checksum: nil}}
+    else
+      {:ok, %File.Stat{}} -> {:error, :enoent}
+      error -> error
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def read_range(key, first, last) when first >= 0 and last >= first do
+    with {:ok, path} <- path(key),
+         true <- File.regular?(path) || {:error, :enoent},
+         {:ok, read} <-
+           File.open(path, [:read, :binary], &:file.pread(&1, first, last - first + 1)) do
+      case read do
+        {:ok, data} -> {:ok, data}
+        :eof -> {:ok, ""}
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 

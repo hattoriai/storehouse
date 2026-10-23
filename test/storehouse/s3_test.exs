@@ -125,4 +125,33 @@ defmodule Storehouse.S3Test do
     assert {:error, :enoent} = S3.read_head("2026/10/none.txt", 10)
     assert {:error, :invalid_key} = S3.read_head("../x", 10)
   end
+
+  test "reads a file back: its head, all of it, a stream of it, and a download" do
+    harbour = File.read!(Path.join(@fixtures, "harbour.jpg"))
+    {:ok, file} = Storehouse.store(Path.join(@fixtures, "harbour.jpg"), adapter: S3)
+
+    assert {:ok, head} = Storehouse.head(file, adapter: S3)
+    assert head == %{bytes: 35_367, content_type: "image/jpeg", checksum: file.checksum}
+
+    assert Storehouse.read(file, adapter: S3) == {:ok, harbour}
+    assert Storehouse.read(file, adapter: S3, max_bytes: 100) == {:error, {:too_large, 35_367}}
+
+    assert {:ok, stream} = Storehouse.stream(file, adapter: S3, chunk_bytes: 10_000)
+    chunks = Enum.to_list(stream)
+    assert Enum.map(chunks, &byte_size/1) == [10_000, 10_000, 10_000, 5_367]
+    assert IO.iodata_to_binary(chunks) == harbour
+
+    path = Path.join(System.tmp_dir!(), "storehouse-s3-download-#{System.unique_integer()}")
+    on_exit(fn -> File.rm(path) end)
+    assert Storehouse.download(file, path, adapter: S3, chunk_bytes: 8_192) == :ok
+    assert File.read!(path) == harbour
+
+    assert S3.read_range(file.key, 35_000, 99_999) == {:ok, binary_part(harbour, 35_000, 367)}
+    assert S3.read_range(file.key, 40_000, 40_100) == {:ok, ""}
+
+    :ok = Storehouse.delete(file.key, adapter: S3)
+    assert Storehouse.head(file, adapter: S3) == {:error, :enoent}
+    assert Storehouse.read(file, adapter: S3) == {:error, :enoent}
+    assert S3.read_range(file.key, 0, 10) == {:error, :enoent}
+  end
 end

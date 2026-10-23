@@ -174,6 +174,67 @@ defmodule Storehouse.S3 do
     end
   end
 
+  @impl Storehouse.Adapter
+  def head(key) do
+    with {:ok, uri} <- object_uri(key) do
+      case request(:head, uri, [{"x-amz-checksum-mode", "ENABLED"}], nil) do
+        {:ok, 200, headers, _body} ->
+          {:ok,
+           %{
+             bytes: headers |> header("content-length", "0") |> String.to_integer(),
+             content_type: header(headers, "content-type", nil),
+             checksum: header(headers, "x-amz-checksum-sha256", nil)
+           }}
+
+        {:ok, 404, _headers, _body} ->
+          {:error, :enoent}
+
+        {:ok, status, _headers, body} ->
+          {:error, {:s3, status, body}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def read_range(key, first, last) when first >= 0 and last >= first do
+    with {:ok, uri} <- object_uri(key) do
+      case request(:get, uri, [{"range", "bytes=#{first}-#{last}"}], nil) do
+        {:ok, 206, _headers, body} ->
+          {:ok, body}
+
+        # A store that sends the whole file, for a range it does not take.
+        {:ok, 200, _headers, body} when first >= byte_size(body) ->
+          {:ok, ""}
+
+        {:ok, 200, _headers, body} ->
+          {:ok, binary_part(body, first, min(last - first + 1, byte_size(body) - first))}
+
+        # Past the end of the file.
+        {:ok, 416, _headers, _body} ->
+          {:ok, ""}
+
+        {:ok, 404, _headers, _body} ->
+          {:error, :enoent}
+
+        {:ok, status, _headers, body} ->
+          {:error, {:s3, status, body}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp header(headers, name, default) do
+    case List.keyfind(headers, name, 0) do
+      {_name, value} -> value
+      nil -> default
+    end
+  end
+
   # An upload streamed through the app (Storehouse.Live.allow/3, mode:
   # :stream): its bytes, in parts of a multipart upload as they come, with
   # at most two parts on their way at once while the next ones arrive; a

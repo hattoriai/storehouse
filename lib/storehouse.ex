@@ -49,7 +49,12 @@ defmodule Storehouse do
     * `[:storehouse, :delete, ...]` - `delete/2`, with `:key` and
       `:adapter`;
     * `[:storehouse, :promote, ...]` - `promote/2`, with `:key` (the
-      temporary one) and `:adapter`.
+      temporary one) and `:adapter`;
+    * `[:storehouse, :head, ...]`, `[:storehouse, :read, ...]` and
+      `[:storehouse, :download, ...]` - `head/2`, `read/2` and
+      `download/3`, with `:key` and `:adapter`;
+    * `[:storehouse, :stream, ...]` - `stream/2`, with `:key` and
+      `:adapter`: the stream's opening, not its reading.
 
   The `:stop` event's metadata has the outcome: `result: :ok` with the
   `:file` (or the `:key`), or `result: :error` with the `:reason` (a file
@@ -447,6 +452,163 @@ defmodule Storehouse do
         )
       )
     end
+  end
+
+  @doc """
+  What the store knows of the file with `key`, without reading it: its
+  `:bytes`, its `:content_type` as stored (or `nil`), and its `:checksum`
+  (or `nil`). A missing file gives `{:error, :enoent}`.
+
+  The size a browser declares for an upload is a claim: ask the store
+  before reading a file it sent.
+
+  ## Options
+
+    * `:adapter` - as for `store/2`. The adapter must read files
+      (`c:Storehouse.Adapter.head/1` and `c:Storehouse.Adapter.read_range/3`):
+      `Storehouse.Local` and `Storehouse.S3` do; another gives
+      `{:error, :not_supported}`.
+  """
+  @spec head(Storehouse.Adapter.key() | Storehouse.File.t(), keyword()) ::
+          {:ok, Storehouse.Adapter.head()} | {:error, term()}
+  def head(key_or_file, opts \\ [])
+  def head(%Storehouse.File{key: key}, opts), do: head(key, opts)
+
+  def head(key, opts) when is_binary(key) do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+    span(:head, %{key: key, adapter: adapter}, fn -> do_head(adapter, key) end)
+  end
+
+  defp do_head(adapter, key) do
+    with :ok <- readable(adapter),
+         true <- valid_key?(key) || {:error, :invalid_key} do
+      adapter.head(key)
+    end
+  end
+
+  defp readable(adapter) do
+    with :ok <- supported(adapter, :head, 1), do: supported(adapter, :read_range, 3)
+  end
+
+  @doc """
+  The bytes of the file with `key`, all at once: to work on a file the
+  app keeps (read its metadata, make a smaller image of it, send it on).
+  For a large file, `stream/2` or `download/3`.
+
+  Its size is asked first (`head/2`): a file larger than `:max_bytes`
+  gives `{:error, {:too_large, bytes}}` before a byte of it is read, and
+  no more than that size is ever read.
+
+  ## Options
+
+    * `:max_bytes` - the largest file to read. The default is no limit.
+    * `:adapter` - as for `head/2`.
+  """
+  @spec read(Storehouse.Adapter.key() | Storehouse.File.t(), keyword()) ::
+          {:ok, binary()} | {:error, term()}
+  def read(key_or_file, opts \\ [])
+  def read(%Storehouse.File{key: key}, opts), do: read(key, opts)
+
+  def read(key, opts) when is_binary(key) do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+
+    span(:read, %{key: key, adapter: adapter}, fn -> do_read(adapter, key, opts) end)
+  end
+
+  defp do_read(adapter, key, opts) do
+    case sized(adapter, key, opts[:max_bytes]) do
+      {:ok, %{bytes: 0}} -> {:ok, ""}
+      {:ok, %{bytes: bytes}} -> adapter.read_range(key, 0, bytes - 1)
+      error -> error
+    end
+  end
+
+  # The file's head, when it is no larger than `max`.
+  defp sized(adapter, key, max) do
+    case do_head(adapter, key) do
+      {:ok, %{bytes: bytes}} when is_integer(max) and bytes > max -> {:error, {:too_large, bytes}}
+      other -> other
+    end
+  end
+
+  @doc """
+  The file with `key` as a stream of its bytes, `:chunk_bytes` at a
+  time, each read from the store as the stream is taken: a large file
+  sent on, into a zip, through the app, with no more of it in memory than
+  a chunk.
+
+  Its size is asked at once (`head/2`), so a missing file gives
+  `{:error, :enoent}` here and a file larger than `:max_bytes`
+  `{:error, {:too_large, bytes}}`. A store's error while the stream is
+  taken raises `Storehouse.ReadError`.
+
+  ## Options
+
+    * `:chunk_bytes` - the size of each read. The default is 4 MiB.
+    * `:max_bytes` - the largest file to stream. The default is no limit.
+    * `:adapter` - as for `head/2`.
+  """
+  @spec stream(Storehouse.Adapter.key() | Storehouse.File.t(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, term()}
+  def stream(key_or_file, opts \\ [])
+  def stream(%Storehouse.File{key: key}, opts), do: stream(key, opts)
+
+  def stream(key, opts) when is_binary(key) do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+    chunk = Keyword.get(opts, :chunk_bytes, 4 * 1_048_576)
+
+    unless is_integer(chunk) and chunk > 0,
+      do: raise(ArgumentError, ":chunk_bytes must be a positive integer, got: #{inspect(chunk)}")
+
+    span(:stream, %{key: key, adapter: adapter}, fn ->
+      with {:ok, %{bytes: bytes}} <- sized(adapter, key, opts[:max_bytes]) do
+        {:ok, Stream.unfold(0, &next_chunk(adapter, key, &1, bytes, chunk))}
+      end
+    end)
+  end
+
+  defp next_chunk(_adapter, _key, offset, bytes, _chunk) when offset >= bytes, do: nil
+
+  defp next_chunk(adapter, key, offset, bytes, chunk) do
+    case adapter.read_range(key, offset, min(offset + chunk, bytes) - 1) do
+      # The file is shorter than it was: it ends here.
+      {:ok, ""} -> nil
+      {:ok, data} -> {data, offset + byte_size(data)}
+      {:error, reason} -> raise Storehouse.ReadError, key: key, reason: reason
+    end
+  end
+
+  @doc """
+  Writes the file with `key` to `path`, a chunk at a time (`stream/2`):
+  for a tool that wants a file on the disk (libvips, ffmpeg, a zip).
+  `path` is replaced; on an error, nothing is left there.
+
+  ## Options
+
+    * `:chunk_bytes`, `:max_bytes` and `:adapter` - as for `stream/2`.
+  """
+  @spec download(Storehouse.Adapter.key() | Storehouse.File.t(), Path.t(), keyword()) ::
+          :ok | {:error, term()}
+  def download(key_or_file, path, opts \\ [])
+  def download(%Storehouse.File{key: key}, path, opts), do: download(key, path, opts)
+
+  def download(key, path, opts) when is_binary(key) and is_binary(path) do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+
+    span(:download, %{key: key, adapter: adapter}, fn ->
+      with {:ok, stream} <- stream(key, Keyword.put(opts, :adapter, adapter)) do
+        write_download(stream, path)
+      end
+    end)
+  end
+
+  defp write_download(stream, path) do
+    _file = Enum.into(stream, File.stream!(path))
+    :ok
+  rescue
+    error in [Storehouse.ReadError, File.Error] ->
+      File.rm(path)
+      {:error, error.reason}
   end
 
   defp supported(adapter, function, arity) do
