@@ -75,6 +75,13 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   says), and DNG as `image/x-adobe-dng`, a download. `Storehouse.Check.photos/0`
   lists those a page can show beside PNG, JPEG, GIF and WebP;
   `images/0` is as it was.
+- The same file again: `:existing`, a function of a checksum, on
+  `store/2`, `presign_upload/4` and `verify_upload/2` gives
+  `{:existing, file}` for a file the app has, never another owner's, with
+  nothing stored (and, at verify, the copy just uploaded deleted).
+  `presign_upload/4`'s `:checksum` (hex or Base64,
+  `Storehouse.claimed_checksum/1`) signs the upload with it: S3, the local
+  plug and `Storehouse.Memory` take only those bytes.
 
 ### Changed
 

@@ -129,6 +129,10 @@ your app's origin to `PUT`, with the headers Storehouse signs:
 ]
 ```
 
+Uploads presigned with a `:checksum` (see "The same file again" in the
+Stores guide) also send `x-amz-checksum-sha256` and
+`x-amz-sdk-checksum-algorithm`: add them to `AllowedHeaders`.
+
 On AWS, in the bucket's permissions; on R2, in the bucket's settings; on
 LocalStack, `awslocal s3api put-bucket-cors`. `Storehouse.Local` needs
 none: the plug is your app.

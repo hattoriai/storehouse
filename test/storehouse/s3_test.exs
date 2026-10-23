@@ -189,4 +189,25 @@ defmodule Storehouse.S3Test do
                do: {:ok, Enum.to_list(s)}
              )
   end
+
+  test "an upload is signed with its checksum, which the bucket keeps" do
+    body = File.read!(Path.join(@fixtures, "harbour.jpg"))
+    checksum = Base.encode64(:crypto.hash(:sha256, body))
+
+    {:ok, upload} =
+      Storehouse.presign_upload("harbour.jpg", "image/jpeg", byte_size(body),
+        adapter: S3,
+        checksum: checksum
+      )
+
+    # Signed, so the browser must send it: S3 then refuses other bytes
+    # (BadDigest). moto keeps the checksum but does not check it.
+    assert upload.headers["x-amz-checksum-sha256"] == checksum
+    signed = upload.url |> URI.parse() |> Map.get(:query) |> URI.decode_query()
+    assert signed["X-Amz-SignedHeaders"] =~ "x-amz-checksum-sha256"
+    assert put_upload(upload, body) == 200
+
+    assert {:ok, file} = Storehouse.verify_upload(upload.key, adapter: S3)
+    assert file.checksum == checksum
+  end
 end

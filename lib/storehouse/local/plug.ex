@@ -121,7 +121,8 @@ defmodule Storehouse.Local.Plug do
     with true <- Enum.all?(segments, &Storehouse.valid_segment?/1) || 400,
          true <-
            Local.signed?(
-             ["PUT", key, params["expires"], type, params["bytes"]],
+             ["PUT", key, params["expires"], type, params["bytes"]] ++
+               List.wrap(params["checksum"]),
              params["expires"],
              params["signature"]
            ) ||
@@ -133,7 +134,7 @@ defmodule Storehouse.Local.Plug do
          true <- String.starts_with?(path, root <> "/") || 400,
          false <- File.exists?(path) && 409,
          :ok <- File.mkdir_p(Path.dirname(path)),
-         {:ok, conn} <- receive_file(conn, path, bytes) do
+         {:ok, conn} <- receive_file(conn, path, bytes, params["checksum"]) do
       conn |> send_resp(200, "") |> halt()
     else
       status when is_integer(status) -> halt_with(conn, status)
@@ -150,14 +151,18 @@ defmodule Storehouse.Local.Plug do
   end
 
   # The body, to a file beside the key's, then in its place: of `bytes`
-  # bytes exactly.
-  defp receive_file(conn, path, bytes) do
+  # bytes exactly, and of the checksum signed, when one was, as S3 checks
+  # it (a 400 then, as S3's BadDigest).
+  defp receive_file(conn, path, bytes, checksum) do
     part = path <> ".part-" <> Integer.to_string(System.unique_integer([:positive]))
 
     case File.open(part, [:write, :binary], &read_into(conn, &1, bytes, 0)) do
       {:ok, {:ok, conn, ^bytes}} ->
-        case File.rename(part, path) do
-          :ok -> {:ok, conn}
+        with true <- is_nil(checksum) or Storehouse.checksum(part) == checksum,
+             :ok <- File.rename(part, path) do
+          {:ok, conn}
+        else
+          false -> discard(part, conn, 400)
           {:error, _reason} -> discard(part, conn, 500)
         end
 

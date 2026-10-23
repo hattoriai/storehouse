@@ -180,7 +180,8 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
         or, sent straight to the store (`allow/3`), checked there with
         `Storehouse.verify_upload/2`: `{:ok, file}`, or `{:error, reason}`
         when the check or the store refuses it (and a file refused there
-        is deleted).
+        is deleted), or `{:existing, file}` with `:existing`, a file the
+        app has already.
       * An entry with an error (too large, a type that is not accepted, too
         many files) is cancelled: `{:error, reason}`, the upload's
         (`:too_large`, `:not_accepted`, `:too_many_files`, …).

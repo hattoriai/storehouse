@@ -111,8 +111,8 @@ defmodule Storehouse.Memory do
   @doc """
   The browser's part of an upload `presign_upload/3` signed: stores
   `body` under its key when it is of the signed size, and gives the
-  status a bucket would (`200`, or `403` for another size or an upload
-  that expired).
+  status a bucket would (`200`, or `403` for another size, other bytes
+  than the checksum signed, or an upload that expired).
   """
   @spec put_upload(Storehouse.Adapter.upload(), binary()) :: 200 | 403
   def put_upload(%{url: url}, body) when is_binary(body) do
@@ -122,7 +122,8 @@ defmodule Storehouse.Memory do
     with {bytes, ""} <- Integer.parse(params["bytes"] || ""),
          true <- bytes == byte_size(body),
          {expires, ""} <- Integer.parse(params["expires"] || ""),
-         true <- expires >= System.system_time(:second) do
+         true <- expires >= System.system_time(:second),
+         true <- params["checksum"] in [nil, Base.encode64(:crypto.hash(:sha256, body))] do
       write(key, body, params["type"])
       200
     else
@@ -233,11 +234,13 @@ defmodule Storehouse.Memory do
   def presign_upload(key, meta, opts) do
     with :ok <- failure(:presign_upload), :ok <- valid(key) do
       query =
-        URI.encode_query(%{
+        %{
           "type" => meta.content_type,
           "bytes" => meta.bytes,
           "expires" => System.system_time(:second) + Keyword.get(opts, :expires_in, 600)
-        })
+        }
+        |> then(&if meta[:checksum], do: Map.put(&1, "checksum", meta.checksum), else: &1)
+        |> URI.encode_query()
 
       {:ok,
        %{

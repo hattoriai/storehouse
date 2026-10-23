@@ -54,6 +54,10 @@ defmodule Storehouse.S3 do
         "AllowedMethods": ["PUT"],
         "AllowedHeaders": ["content-type", "content-disposition"],
         "MaxAgeSeconds": 3600}]
+
+  An upload presigned with its checksum (`:checksum`) is signed with
+  `x-amz-checksum-sha256` too, and the bucket refuses bytes that do not
+  have it: add it and `x-amz-sdk-checksum-algorithm` to `AllowedHeaders`.
   """
 
   @behaviour Storehouse.Adapter
@@ -113,7 +117,12 @@ defmodule Storehouse.S3 do
   def presign_upload(key, meta, opts) do
     with {:ok, uri} <- object_uri(key) do
       type = Map.fetch!(meta, :content_type)
-      headers = %{"content-type" => type, "content-disposition" => disposition(type)}
+
+      headers =
+        Map.merge(
+          %{"content-type" => type, "content-disposition" => disposition(type)},
+          checksum_headers(meta[:checksum])
+        )
 
       # The size is signed too: the bucket takes the file of that size only.
       signed =
@@ -126,6 +135,12 @@ defmodule Storehouse.S3 do
       {:ok, %{method: "PUT", url: URI.to_string(signed), headers: headers}}
     end
   end
+
+  # With a checksum, the bucket takes only the bytes that have it.
+  defp checksum_headers(nil), do: %{}
+
+  defp checksum_headers(checksum),
+    do: %{"x-amz-checksum-sha256" => checksum, "x-amz-sdk-checksum-algorithm" => "SHA256"}
 
   @impl Storehouse.Adapter
   def signed_url(key, opts) do
