@@ -177,6 +177,14 @@ defmodule Storehouse.Local do
     end
   end
 
+  @impl Storehouse.Adapter
+  def checksum(key) do
+    with {:ok, path} <- path(key),
+         true <- File.regular?(path) || {:error, :enoent} do
+      {:ok, Storehouse.checksum(path)}
+    end
+  end
+
   @doc false
   # The signature of a request the plug takes: its parts, joined.
   def sign(parts) do

@@ -64,6 +64,11 @@ defmodule Storehouse.S3Test do
     assert headers["content-type"] == "image/jpeg"
     assert headers["content-disposition"] == ~s(attachment; filename="The quay.jpg")
 
+    # Sent with its checksum, which the bucket checks and keeps.
+    assert file.checksum == Storehouse.checksum(Path.join(@fixtures, "harbour.jpg"))
+    assert {:ok, checksum} = S3.checksum(file.key)
+    assert checksum == file.checksum
+
     assert {:ok, head, 35_367} = S3.read_head(file.key, 4)
     assert head == <<0xFF, 0xD8, 0xFF, 0xE0>>
 
@@ -96,7 +101,8 @@ defmodule Storehouse.S3Test do
 
     assert put_upload(upload, data) == 200
 
-    assert {:ok, %Storehouse.File{name: "Small.png", width: 4, height: 3}} =
+    # The browser sent no checksum: the bucket keeps none.
+    assert {:ok, %Storehouse.File{name: "Small.png", width: 4, height: 3, checksum: nil}} =
              Storehouse.verify_upload(upload.key, adapter: S3, name: "Small.png")
   end
 

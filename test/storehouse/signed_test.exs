@@ -46,6 +46,7 @@ defmodule Storehouse.SignedTest do
       assert put_file(upload, data, opts).status == 409
 
       assert {:ok, file} = Storehouse.verify_upload(key, name: "Quay.jpg")
+      assert file.checksum == Base.encode64(:crypto.hash(:sha256, data))
 
       assert %Storehouse.File{
                name: "Quay.jpg",

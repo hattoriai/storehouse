@@ -11,12 +11,17 @@ defmodule Storehouse.File do
     * `:bytes` - its size.
     * `:width` and `:height` - an image's, as a browser draws it (turned as
       a JPEG's EXIF says), or `nil`.
+    * `:checksum` - the SHA-256 of its bytes, in Base64 (as S3's
+      `x-amz-checksum-sha256`): the store checked it as it took the file,
+      and `Storehouse.checksum/1` gives it of a copy, to compare. `nil` for
+      a file uploaded straight to a store that keeps none
+      (`Storehouse.verify_upload/2`).
     * `:preview` - the URL of a smaller image of it (a thumbnail, a PDF's
       first page, a video's poster), when the app made one, or `nil`.
   """
 
   @enforce_keys [:key, :url, :name, :content_type, :bytes]
-  defstruct [:key, :url, :name, :content_type, :bytes, :width, :height, :preview]
+  defstruct [:key, :url, :name, :content_type, :bytes, :width, :height, :checksum, :preview]
 
   @type t :: %__MODULE__{
           key: Storehouse.Adapter.key(),
@@ -26,6 +31,7 @@ defmodule Storehouse.File do
           bytes: non_neg_integer(),
           width: pos_integer() | nil,
           height: pos_integer() | nil,
+          checksum: String.t() | nil,
           preview: String.t() | nil
         }
 

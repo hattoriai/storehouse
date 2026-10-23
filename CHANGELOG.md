@@ -40,5 +40,13 @@ The first release: the storage of Kotoba and Hakushi, taken out of them.
   a lasting URL that checks the person and redirects to a signed one.
 - `Storehouse.Live.consume/3`: the files of a LiveView upload, each
   stored once, with a result for each.
+- Checksums: each `Storehouse.File` has the SHA-256 of its bytes
+  (`checksum`, Base64), sent to S3 with the file
+  (`x-amz-checksum-sha256`), which checks and keeps it;
+  `Storehouse.checksum/1` gives it of a copy, and the optional adapter
+  callback `checksum/1` gives a stored file's.
+- Telemetry: `[:storehouse, :store | :fetch | :presign_upload |
+  :verify_upload | :delete, :start | :stop | :exception]` spans, with the
+  file or the reason a file was refused.
 - Keys (`Storehouse.key/2`, `safe_name/2`, `valid_key?/1`), display names
   (`clean_name/1`) and `safe_url?/1`.

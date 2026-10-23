@@ -67,11 +67,20 @@ defmodule Storehouse.S3 do
          {:ok, %File.Stat{size: size}} <- File.stat(path) do
       type = Map.get(meta, :content_type, "application/octet-stream")
 
-      headers = [
-        {"content-type", type},
-        {"content-disposition", disposition(type)},
-        {"content-length", Integer.to_string(size)}
-      ]
+      # With its checksum, the bucket refuses a file that is not the one sent.
+      headers =
+        [
+          {"content-type", type},
+          {"content-disposition", disposition(type)},
+          {"content-length", Integer.to_string(size)}
+        ] ++
+          if(meta[:checksum],
+            do: [
+              {"x-amz-sdk-checksum-algorithm", "SHA256"},
+              {"x-amz-checksum-sha256", meta.checksum}
+            ],
+            else: []
+          )
 
       case request(:put, uri, headers, {:file, path, size}) do
         {:ok, status, _headers, _body} when status in 200..299 -> {:ok, url(key)}
@@ -152,6 +161,25 @@ defmodule Storehouse.S3 do
         # An empty file has no range.
         {:ok, 416, _headers, _body} ->
           {:ok, "", 0}
+
+        {:ok, 404, _headers, _body} ->
+          {:error, :enoent}
+
+        {:ok, status, _headers, body} ->
+          {:error, {:s3, status, body}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def checksum(key) do
+    with {:ok, uri} <- object_uri(key) do
+      case request(:head, uri, [{"x-amz-checksum-mode", "ENABLED"}], nil) do
+        {:ok, 200, headers, _body} ->
+          {:ok, headers |> List.keyfind("x-amz-checksum-sha256", 0) |> then(&(&1 && elem(&1, 1)))}
 
         {:ok, 404, _headers, _body} ->
           {:error, :enoent}

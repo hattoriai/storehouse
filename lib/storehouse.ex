@@ -32,6 +32,29 @@ defmodule Storehouse do
   (`Storehouse.Check.extension/1`), never from the client's file name, so
   a key never ends in `.html` or `.svg`. An adapter refuses a key that
   `valid_key?/1` refuses.
+
+  ## Telemetry
+
+  Storehouse emits `:telemetry` spans, each a `:start`, then a `:stop`
+  (or an `:exception`) event, with the `:duration` of the work:
+
+    * `[:storehouse, :store, ...]` - `store/2`, with `:name` and
+      `:adapter`;
+    * `[:storehouse, :fetch, ...]` - `fetch/2`, with `:url` (without its
+      query) and `:adapter` (its `store/2` has a span of its own);
+    * `[:storehouse, :presign_upload, ...]` - `presign_upload/4`, with
+      `:name`, `:content_type`, `:bytes` and `:adapter`;
+    * `[:storehouse, :verify_upload, ...]` - `verify_upload/2`, with
+      `:key` and `:adapter`;
+    * `[:storehouse, :delete, ...]` - `delete/2`, with `:key` and
+      `:adapter`.
+
+  The `:stop` event's metadata has the outcome: `result: :ok` with the
+  `:file` (or the `:key`), or `result: :error` with the `:reason` (a file
+  refused: `:not_accepted`, `:too_large`, `:not_allowed`; a store's
+  error). For example, to count the files refused:
+
+      :telemetry.attach("storehouse-refused", [:storehouse, :store, :stop], &MyApp.Metrics.file/4, nil)
   """
 
   require Logger
@@ -83,16 +106,24 @@ defmodule Storehouse do
   @spec store(Path.t(), keyword()) :: {:ok, Storehouse.File.t()} | {:error, term()}
   def store(path, opts \\ []) when is_binary(path) do
     name = clean_name(Keyword.get_lazy(opts, :name, fn -> Path.basename(path) end))
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+    span(:store, %{name: name, adapter: adapter}, fn -> do_store(path, name, adapter, opts) end)
+  end
 
+  defp do_store(path, name, adapter, opts) do
     claim =
       Keyword.get_lazy(opts, :content_type, fn -> Check.content_type(Path.extname(name)) end)
-
-    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
 
     with {:ok, description} <- Check.describe(path, claim, opts),
          :ok <- accepted(description.content_type, Keyword.get(opts, :accept)),
          {:ok, key} <- new_key(Keyword.get(opts, :key, &key/2), name, description.content_type),
-         meta = %{name: name, content_type: description.content_type, bytes: description.bytes},
+         checksum = checksum(path),
+         meta = %{
+           name: name,
+           content_type: description.content_type,
+           bytes: description.bytes,
+           checksum: checksum
+         },
          {:ok, url} <- put(adapter, key, path, meta) do
       file = %Storehouse.File{
         key: key,
@@ -101,7 +132,8 @@ defmodule Storehouse do
         content_type: description.content_type,
         bytes: description.bytes,
         width: description.width,
-        height: description.height
+        height: description.height,
+        checksum: checksum
       }
 
       {:ok, preview(file, path, Keyword.get(opts, :preview))}
@@ -197,7 +229,11 @@ defmodule Storehouse do
     adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
     type = Check.claimed(claim)
     name = clean_name(name)
+    meta = %{name: name, content_type: type, bytes: bytes, adapter: adapter}
+    span(:presign_upload, meta, fn -> do_presign_upload(name, type, bytes, adapter, opts) end)
+  end
 
+  defp do_presign_upload(name, type, bytes, adapter, opts) do
     with :ok <- supported(adapter, :presign_upload, 3),
          :ok <- accepted(type, Keyword.get(opts, :accept)),
          :ok <-
@@ -233,6 +269,13 @@ defmodule Storehouse do
           {:ok, Storehouse.File.t()} | {:error, term()}
   def verify_upload(key, opts \\ []) do
     adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+
+    span(:verify_upload, %{key: key, adapter: adapter}, fn ->
+      do_verify_upload(key, adapter, opts)
+    end)
+  end
+
+  defp do_verify_upload(key, adapter, opts) do
     signed = Check.content_type(Path.extname(key))
 
     with true <- valid_key?(key) || {:error, :invalid_key},
@@ -247,11 +290,34 @@ defmodule Storehouse do
         content_type: signed,
         bytes: description.bytes,
         width: description.width,
-        height: description.height
+        height: description.height,
+        checksum: stored_checksum(adapter, key)
       }
 
       {:ok, preview(file, nil, Keyword.get(opts, :preview))}
     end
+  end
+
+  defp stored_checksum(adapter, key) do
+    with :ok <- supported(adapter, :checksum, 1),
+         {:ok, checksum} <- adapter.checksum(key) do
+      checksum
+    else
+      _none -> nil
+    end
+  end
+
+  @doc """
+  The SHA-256 of the file at `path`, in Base64: a `Storehouse.File`'s
+  `checksum`, to compare with a copy's.
+  """
+  @spec checksum(Path.t()) :: String.t()
+  def checksum(path) do
+    path
+    |> File.stream!(1_048_576)
+    |> Enum.reduce(:crypto.hash_init(:sha256), &:crypto.hash_update(&2, &1))
+    |> :crypto.hash_final()
+    |> Base.encode64()
   end
 
   # The bytes are of the type the upload was signed for (any, for a
@@ -340,6 +406,13 @@ defmodule Storehouse do
   """
   @spec fetch(String.t(), keyword()) :: {:ok, Storehouse.File.t()} | {:error, term()}
   def fetch(url, opts) when is_binary(url) do
+    # The address, without its query: it may carry a token.
+    address = url |> URI.parse() |> Map.put(:query, nil) |> URI.to_string()
+    meta = %{url: address, adapter: Keyword.get_lazy(opts, :adapter, &adapter/0)}
+    span(:fetch, meta, fn -> do_fetch(url, opts) end)
+  end
+
+  defp do_fetch(url, opts) do
     hosts = Keyword.fetch!(opts, :hosts)
     schemes = if Keyword.get(opts, :http, false), do: ["https", "http"], else: ["https"]
 
@@ -491,7 +564,25 @@ defmodule Storehouse do
 
   @doc "Deletes the file with `key`, through the adapter (`:adapter`, or `adapter/0`)."
   @spec delete(Storehouse.Adapter.key(), keyword()) :: :ok | {:error, term()}
-  def delete(key, opts \\ []), do: Keyword.get_lazy(opts, :adapter, &adapter/0).delete(key)
+  def delete(key, opts \\ []) do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+    span(:delete, %{key: key, adapter: adapter}, fn -> adapter.delete(key) end)
+  end
+
+  # A span of telemetry events (see the module doc): its outcome in the
+  # stop event's metadata.
+  defp span(event, meta, fun) do
+    :telemetry.span([:storehouse, event], meta, fn ->
+      result = fun.()
+      {result, Map.merge(meta, outcome(result))}
+    end)
+  end
+
+  defp outcome({:ok, %Storehouse.File{} = file}), do: %{result: :ok, file: file}
+  defp outcome({:ok, %{key: key}}), do: %{result: :ok, key: key}
+  defp outcome({:ok, _other}), do: %{result: :ok}
+  defp outcome(:ok), do: %{result: :ok}
+  defp outcome({:error, reason}), do: %{result: :error, reason: reason}
 
   @doc "Returns the URL of the file with `key`, through the adapter (`:adapter`, or `adapter/0`)."
   @spec url(Storehouse.Adapter.key(), keyword()) :: String.t()

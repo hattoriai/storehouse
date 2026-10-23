@@ -57,13 +57,15 @@ defmodule Storehouse.Adapter do
 
   @typedoc """
   What Storehouse knows of the file: `:name` (the client's name, for
-  display only), `:content_type` (checked on the server, `Storehouse.Check`)
-  and `:bytes`.
+  display only), `:content_type` (checked on the server, `Storehouse.Check`),
+  `:bytes`, and `:checksum` (its SHA-256, in Base64), which a store that
+  can checks as it takes the file (`Storehouse.S3` does).
   """
   @type meta :: %{
           optional(:name) => String.t(),
           optional(:content_type) => String.t(),
-          optional(:bytes) => non_neg_integer()
+          optional(:bytes) => non_neg_integer(),
+          optional(:checksum) => String.t()
         }
 
   @doc """
@@ -112,5 +114,11 @@ defmodule Storehouse.Adapter do
   @callback read_head(key(), bytes :: pos_integer()) ::
               {:ok, head :: binary(), size :: non_neg_integer()} | {:error, term()}
 
-  @optional_callbacks presign_upload: 3, signed_url: 2, read_head: 2
+  @doc """
+  The SHA-256 of the file with `key`, in Base64, as the store knows it, or
+  `nil` when it keeps none: for a file uploaded straight to it. Optional.
+  """
+  @callback checksum(key()) :: {:ok, String.t() | nil} | {:error, term()}
+
+  @optional_callbacks presign_upload: 3, signed_url: 2, read_head: 2, checksum: 1
 end

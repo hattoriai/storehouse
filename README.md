@@ -14,8 +14,8 @@ your app.
 
 > **Status: early release.** Checking, storing, the local disk and S3
 > (and the stores that speak its API), uploads straight to the store,
-> signed URLs for private files, files from an address, and LiveView
-> uploads are here. Before 1.0,
+> signed URLs for private files, checksums, telemetry, files from an
+> address, and LiveView uploads are here. Before 1.0,
 > a minor version may change the API; see the roadmap for what comes
 > next.
 
@@ -64,6 +64,10 @@ It gives your app:
   pasted by its address, a file an agent names;
 * **limits**: the largest file, the most pixels of an image, the types
   you take;
+* **checksums**: each file's SHA-256, kept with it, and checked by S3 as
+  it takes the file;
+* **telemetry**: `:telemetry` spans for storing, fetching, signing,
+  checking and deleting, with what was refused and why;
 * **previews**: a function of yours gives a smaller image of a file (a
   thumbnail, a PDF's first page), kept with it.
 
@@ -155,18 +159,17 @@ and [LiveView](guides/liveview.md).
 
 ## Roadmap
 
-* **Records of files** (optional, with Ecto): what is stored, its
-  checksum, and what uses it.
-* **Cleanup**: the files nothing uses any more, deleted after a while
-  (so that an undo still finds them), and uploads never kept.
-* **Variants**: images resized and converted when they are asked for
-  (with an optional image library), kept beside the file.
-* **Previews made for you**: a PDF's first page, a video's poster.
-* **More of what a file is**: a video's length and size, audio.
-* **A mirror**: writing to two stores at once, to move from one to the
-  other.
-* **Proxying** a private bucket's files through the app, for a CDN in
-  front of it.
+* **Cleanup of unused files**: deleted files stay in storage today, and
+  abandoned direct uploads too.
+* **Variants**: images resized and converted on demand and cached. Today
+  the app passes a preview function.
+* **Previews and analysis**: a PDF's first page, a video's poster, length
+  and audio. Storehouse reads image sizes only.
+* **Mirror**: writing to two stores at once, for migrating between them.
+* **Proxy mode**: streaming private bucket files through the app, for a
+  CDN in front.
+* **Azure and native Google Cloud Storage**: Google Cloud Storage works
+  through its S3-compatible API today.
 
 ## Development
 

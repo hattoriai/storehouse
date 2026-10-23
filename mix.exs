@@ -55,6 +55,7 @@ defmodule Storehouse.MixProject do
       # rest of Storehouse works as it is.
       {:phoenix_live_view, "~> 1.1", optional: true},
       {:plug, "~> 1.15"},
+      {:telemetry, "~> 1.0"},
       # A web server for the tests of fetch/2.
       {:bandit, "~> 1.5", only: :test},
       {:stream_data, "~> 1.1", only: :test}

@@ -50,6 +50,18 @@ defmodule Storehouse.StoreTest do
     end
   end
 
+  describe "a checksum" do
+    test "is the SHA-256 of the bytes, kept with the file", %{root: root} do
+      path = fixture("harbour.jpg")
+      sha = path |> File.read!() |> then(&:crypto.hash(:sha256, &1)) |> Base.encode64()
+
+      assert Storehouse.checksum(path) == sha
+      assert {:ok, %{checksum: ^sha, key: key}} = Storehouse.store(path)
+      assert Storehouse.checksum(Path.join(root, key)) == sha
+      assert {:ok, ^sha} = Storehouse.Local.checksum(key)
+    end
+  end
+
   describe "the limits" do
     test "refuse a file too large, an image of too many pixels, a type not taken", %{root: root} do
       assert {:error, :too_large} = Storehouse.store(fixture("harbour.jpg"), max_bytes: 1_000)
