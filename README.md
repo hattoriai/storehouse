@@ -69,6 +69,9 @@ It gives your app:
 * **serving that is safe**: `Storehouse.Local.Plug` sends the checked
   type, `nosniff`, a sandboxing CSP, downloads for every type a browser
   should not show, and byte ranges, for video;
+* **uploads from any client** (React, Vue, a native app, Uppy): JSON
+  endpoints that presign and register files in batches, one result per
+  file, the room shared by the batch;
 * **LiveView uploads, stored**: `Storehouse.Live.consume/3` stores each
   finished entry once, cancels those the upload refused, and gives you a
   result for each;
@@ -208,7 +211,8 @@ The guides: [Stores](guides/stores.md) (the local disk, S3, LocalStack,
 development), [Direct uploads](guides/direct_uploads.md) (and streamed
 ones), [Ecto](guides/ecto.md), [Private files](guides/private_files.md),
 [Serving](guides/serving.md), [LiveView](guides/liveview.md) and
-[After the upload](guides/analysis.md).
+[After the upload](guides/analysis.md) and
+[Uploads from any client](guides/any_client.md).
 
 ## How Storehouse compares
 
@@ -235,7 +239,7 @@ another library is welcome as an issue.
 | Placeholders while an image loads | Not yet ([#4](https://github.com/hattoriai/storehouse/issues/4)) | No | No | Yes | No |
 | A table of files | Not yet ([#16](https://github.com/hattoriai/storehouse/issues/16)) | No | No | Yes | Yes |
 | The same file uploaded again is the one kept | Yes: before the upload, and when it is verified | No | No | No | No |
-| Endpoints and a client for frontends without LiveView | Not yet ([#10](https://github.com/hattoriai/storehouse/issues/10), [#11](https://github.com/hattoriai/storehouse/issues/11)) | No | No | Presign and complete | No |
+| Endpoints and a client for frontends without LiveView | Endpoints: yes, in batches. Client: not yet ([#11](https://github.com/hattoriai/storehouse/issues/11)) | No | No | Presign and complete | No |
 | Resumable and multipart uploads from the browser | Not yet ([#12](https://github.com/hattoriai/storehouse/issues/12)) | No | No | No | No |
 | A store in memory, for async tests | Yes, with assertions | No | Yes | Yes | No |
 | Dependencies | None | Req, ImageMagick | None | Several | Oban, Vix |
@@ -250,8 +254,8 @@ another library is welcome as an issue.
   by comparing the app's records with the store.
 * **Resumable uploads** that survive a reconnect (and the tus protocol),
   and multipart uploads straight from the browser, for very large files.
-* **Endpoints for other clients**: presign and upload endpoints, for Uppy
-  and for apps with no LiveView.
+* **A JavaScript client for any frontend**: an upload queue with checksums
+  in a Web Worker, progress and batched registration, for the endpoints.
 * **Mirror**: writing to two stores at once, for migrating between them.
 * **Proxy mode**: streaming private bucket files through the app, for a
   CDN in front.

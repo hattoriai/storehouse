@@ -82,6 +82,14 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   `presign_upload/4`'s `:checksum` (hex or Base64,
   `Storehouse.claimed_checksum/1`) signs the upload with it: S3, the local
   plug and `Storehouse.Memory` take only those bytes.
+- Uploads from any client: `Storehouse.Batch.presign/2` and `register/2`
+  sign and check a batch of uploads straight to the store, one result per
+  file (`{:ok, _}`, `{:existing, file}` or `{:error, code}`), the room
+  shared by the batch, the same bytes twice in a batch one file.
+  `Storehouse.Plug.Presign` and `Storehouse.Plug.Register` answer them in
+  JSON, with the owner, the room and the files the app has asked of
+  functions of the conn, and the app's own JSON of its records from
+  `:then`.
 
 ### Changed
 
