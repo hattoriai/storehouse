@@ -380,8 +380,24 @@ defmodule Storehouse.Local do
   @impl Storehouse.Adapter
   def stream_close(%{io: io, part: part, path: path, key: key, config: c}) do
     with :ok <- File.close(io),
-         :ok <- File.rename(part, path) do
+         :ok <- place(part, path) do
       {:ok, url(c, key)}
+    else
+      {:error, _reason} = error ->
+        _removed = File.rm(part)
+        error
+    end
+  end
+
+  @doc false
+  # A file written beside its key's put in its place, only where no file
+  # is (a link, which fails on one, then the file beside it removed): two
+  # writes of one key at once never replace the first.
+  @spec place(Path.t(), Path.t()) :: :ok | {:error, File.posix()}
+  def place(part, path) do
+    with :ok <- File.ln(part, path) do
+      _removed = File.rm(part)
+      :ok
     end
   end
 

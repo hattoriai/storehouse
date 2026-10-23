@@ -94,16 +94,26 @@ defmodule Storehouse.S3Test do
     assert {:ok, upload} =
              Storehouse.presign_upload("Small.png", "image/png", byte_size(data), adapter: S3)
 
-    assert upload.headers == %{"content-type" => "image/png", "content-disposition" => "inline"}
+    assert upload.headers == %{
+             "content-type" => "image/png",
+             "content-disposition" => "inline",
+             "if-none-match" => "*"
+           }
 
     assert upload.url =~
-             "X-Amz-SignedHeaders=content-disposition%3Bcontent-length%3Bcontent-type%3Bhost"
+             "X-Amz-SignedHeaders=content-disposition%3Bcontent-length%3Bcontent-type%3Bhost%3Bif-none-match"
 
     assert put_upload(upload, data) == 200
 
     # The browser sent no checksum: the bucket keeps none.
     assert {:ok, %Storehouse.File{name: "Small.png", width: 4, height: 3, checksum: nil}} =
              Storehouse.verify_upload(upload.key, adapter: S3, name: "Small.png")
+
+    # Checked: the same URL puts nothing in its place, not even bytes of the
+    # same size.
+    page = String.pad_trailing("<html><script>alert(1)</script>", byte_size(data))
+    assert put_upload(upload, page) in [403, 412]
+    assert {:ok, ^data} = Storehouse.read(upload.key, adapter: S3)
   end
 
   test "deletes an upload whose bytes are not what it said" do

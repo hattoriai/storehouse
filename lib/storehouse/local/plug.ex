@@ -189,10 +189,12 @@ defmodule Storehouse.Local.Plug do
     case File.open(part, [:write, :binary], &read_into(conn, &1, bytes, 0)) do
       {:ok, {:ok, conn, ^bytes}} ->
         with true <- is_nil(checksum) or Storehouse.checksum(part) == checksum,
-             :ok <- File.rename(part, path) do
+             :ok <- Local.place(part, path) do
           {:ok, conn}
         else
           false -> discard(part, conn, 400)
+          # Another PUT of the key finished first: it stays.
+          {:error, :eexist} -> discard(part, conn, 409)
           {:error, _reason} -> discard(part, conn, 500)
         end
 

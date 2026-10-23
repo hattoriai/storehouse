@@ -53,6 +53,22 @@ defmodule Storehouse.SignedTest do
       assert File.read!(Path.join(root, upload.key)) == data
     end
 
+    test "two writes of one key at once: the first stays", %{root: root} do
+      key = "2026/10/0b6f4c2e-5f0a-4d4c-9a51-2f0e7d1c3b9a-a.png"
+      config = Storehouse.Local.config()
+
+      # Both began before either was done: neither saw a file there.
+      {:ok, first} = Storehouse.Local.stream_open(config, key, %{})
+      {:ok, second} = Storehouse.Local.stream_open(config, key, %{})
+      {:ok, first} = Storehouse.Local.stream_write(first, "checked")
+      {:ok, second} = Storehouse.Local.stream_write(second, "never!!")
+
+      assert {:ok, _url} = Storehouse.Local.stream_close(first)
+      assert {:error, :eexist} = Storehouse.Local.stream_close(second)
+      assert File.read!(Path.join(root, key)) == "checked"
+      assert File.ls!(Path.dirname(Path.join(root, key))) == [Path.basename(key)]
+    end
+
     test "is taken at the URL it signed, of its type and size, once", %{root: root, public: opts} do
       data = File.read!(Path.join(@fixtures, "harbour.jpg"))
       assert {:ok, upload} = Storehouse.presign_upload("Quay.jpg", "image/jpeg", byte_size(data))

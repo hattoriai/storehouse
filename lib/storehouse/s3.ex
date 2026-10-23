@@ -44,6 +44,11 @@ defmodule Storehouse.S3 do
       so a file never changes: `"public, max-age=31536000, immutable"`.
       The default is none, the bucket's own. A call's `:cache_control`
       takes its place (`Storehouse.store/2`).
+    * `:if_none_match` - whether an upload straight to the bucket is
+      signed with `If-None-Match: *`, so the bucket takes it only where no
+      file is: its URL cannot replace a file once it was checked. The
+      default is `true`; AWS S3, R2 and MinIO take it. Set it to `false`
+      for a store that refuses the header.
 
   Each file is stored with its checked content type, and with
   `Content-Disposition: attachment` for every type a browser should not
@@ -58,8 +63,12 @@ defmodule Storehouse.S3 do
 
       [{"AllowedOrigins": ["https://my-app.example.com"],
         "AllowedMethods": ["PUT"],
-        "AllowedHeaders": ["content-type", "content-disposition"],
+        "AllowedHeaders": ["content-type", "content-disposition", "if-none-match"],
         "MaxAgeSeconds": 3600}]
+
+  The URL writes only where no file is (`If-None-Match: *`): once the
+  file was checked (`Storehouse.verify_upload/2`), the same URL cannot
+  put other bytes in its place.
 
   An upload presigned with its checksum (`:checksum`) is signed with
   `x-amz-checksum-sha256` too, and the bucket refuses bytes that do not
@@ -230,6 +239,7 @@ defmodule Storehouse.S3 do
         %{"content-type" => type, "content-disposition" => disposition(type)}
         |> Map.merge(checksum_headers(meta[:checksum]))
         |> Map.merge(Map.new(cache_header(c, meta)))
+        |> Map.merge(once_header(c))
 
       # The size is signed too: the bucket takes the file of that size only.
       signed =
@@ -250,6 +260,10 @@ defmodule Storehouse.S3 do
       value -> [{"cache-control", value}]
     end
   end
+
+  # Only where no file is: the URL never replaces the file it put there.
+  defp once_header(c),
+    do: if(Keyword.get(c, :if_none_match, true), do: %{"if-none-match" => "*"}, else: %{})
 
   # With a checksum, the bucket takes only the bytes that have it.
   defp checksum_headers(nil), do: %{}
