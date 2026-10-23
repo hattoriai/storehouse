@@ -100,13 +100,20 @@ defmodule Storehouse.Zip do
   the disk): a `Storehouse.File` of type `application/zip`, with its size
   and checksum.
 
-  Takes the options of `stream/2`. A store's error, or a file not the
-  size it was, gives `{:error, reason}`, and nothing is left in the store.
+  Takes the options of `stream/2`, and `:expires_in`: seconds after which
+  the zip is deleted, under an expiring key (`Storehouse.expiring_key/2`),
+  for an export whose link lasts a day. A store's error, or a file not
+  the size it was, gives `{:error, reason}`, and nothing is left in the
+  store.
   """
   @spec store([entry()], Storehouse.Adapter.key(), keyword()) ::
           {:ok, Storehouse.File.t()} | {:error, term()}
   def store(entries, key, opts \\ []) do
     adapter = Keyword.get_lazy(opts, :adapter, &Storehouse.adapter/0)
+
+    key =
+      if expires_in = opts[:expires_in], do: Storehouse.expiring_key(key, expires_in), else: key
+
     meta = %{key: key, adapter: adapter, entries: length(entries)}
 
     :telemetry.span([:storehouse, :zip], meta, fn ->

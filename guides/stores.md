@@ -451,8 +451,9 @@ use, on its prefix:
 On the local disk, and a store with no lifecycle rules, `Storehouse.Sweeper`
 deletes them once their time has come.
 
-A file made in the store as a stream takes an expiring key too:
-`Storehouse.expiring_key("exports/42.zip", 86_400)`.
+A zip takes `expires_in:` too, `Storehouse.Zip.store(entries,
+"exports/42.zip", expires_in: 86_400)`, and anything else made in the
+store an expiring key: `Storehouse.expiring_key("exports/42.csv", 86_400)`.
 
 ## Files from an address
 

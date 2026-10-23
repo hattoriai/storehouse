@@ -98,6 +98,18 @@ defmodule Storehouse.ZipTest do
     assert bytes == file.bytes
   end
 
+  test "a zip that expires", %{photo: photo} do
+    {:ok, file} =
+      Zip.store([{"a.jpg", {:stored, photo.key}}], "exports/2.zip",
+        adapter: Memory,
+        expires_in: 86_400
+      )
+
+    assert "expiring/1d/" <> _rest = file.key
+    assert String.ends_with?(file.key, "/exports/2.zip")
+    assert %DateTime{} = Storehouse.expires_at(file)
+  end
+
   test "a stored file not the size it was stops the zip, and nothing is kept", %{small: small} do
     {:ok, zip} = Zip.stream([{"small.png", {:stored, small.key}}], adapter: Memory)
 
