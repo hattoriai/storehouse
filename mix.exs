@@ -107,6 +107,7 @@ defmodule Storehouse.MixProject do
         Stores: [Storehouse.Adapter, Storehouse.Local, Storehouse.Local.Plug, Storehouse.S3],
         Analysis: [
           Storehouse.Analyzer,
+          Storehouse.Analysis,
           Storehouse.Analyzer.Size,
           Storehouse.Tasks,
           Storehouse.Oban.Analyze

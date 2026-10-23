@@ -35,15 +35,16 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   default), kept by `Storehouse.Ecto.File`, given with `store/2`'s and
   `verify_upload/2`'s `:metadata` and merged with
   `Storehouse.File.put_metadata/2` and `Storehouse.Ecto.put_metadata/3,4`.
-  `Storehouse.Metadata` keeps it to what JSON and `jsonb` hold. The key
-  `"analyzed"` is the analysis's (`Storehouse.File.put_analyzed/3`,
-  `analyzed/2`), never written by `put_metadata/2`.
+  `Storehouse.Metadata` keeps it to what JSON and `jsonb` hold. Every key
+  of it is the app's.
 - `Storehouse.File` as JSON (`JSON.Encoder`, and `Jason.Encoder` with
-  Jason), without the analysis's metadata; `Storehouse.File.to_map/2`
-  chooses what goes.
+  Jason), without its analysis; `Storehouse.File.to_map/2` chooses what
+  goes.
 - Work after the upload: `Storehouse.Analyzer`, a step of the app's that
-  reads a stored file, its result kept under the file's `"analyzed"`
-  metadata. `Storehouse.analyze/3` runs steps at once, each once (or again
+  reads a stored file. What it made of the file is the file's `:analysis`,
+  by step name: a `Storehouse.Analysis` (status, result, error, when),
+  apart from the metadata, read with `Storehouse.File.analysis/2` and
+  `analyzed/2` and kept in the column by `Storehouse.Ecto.File`. `Storehouse.analyze/3` runs steps at once, each once (or again
   with `force: true`), a failure kept with why; `store/2`'s `:analyze`
   runs them on the file just stored, from its path.
   `Storehouse.analyze_later/3` runs them in `Storehouse.Tasks`, a

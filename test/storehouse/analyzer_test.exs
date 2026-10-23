@@ -21,7 +21,8 @@ defmodule Storehouse.AnalyzerTest do
 
     assert Storehouse.File.analyzed(file, "bytes") == %{"bytes" => 35_367}
     assert Storehouse.File.analyzed(file, "first_byte") == %{"value" => 0xFF}
-    assert Storehouse.File.analyzed(file, "skip") == %{"skipped" => true}
+    assert %Storehouse.Analysis{status: :skipped} = Storehouse.File.analysis(file, "skip")
+    assert Storehouse.File.analyzed(file, "skip") == nil
 
     # Read from the store once, to one temporary file, removed after them.
     assert_received {:bytes, _key, path, true}
@@ -52,7 +53,9 @@ defmodule Storehouse.AnalyzerTest do
                Storehouse.Analyzer.Size
              ])
 
-    assert Storehouse.File.analyzed(file, "fail") == %{"error" => ":no_tool"}
+    assert %Storehouse.Analysis{status: :failed, error: ":no_tool"} =
+             Storehouse.File.analysis(file, "fail")
+
     assert Storehouse.File.analyzed(file, "no_file") == %{"ran" => true}
     assert Storehouse.File.analyzed(file, "size")["bytes"] == 35_367
 
@@ -74,6 +77,15 @@ defmodule Storehouse.AnalyzerTest do
 
     {:ok, _file} = analyze(file, [{NoFile, test: test}], force: true)
     assert_received {:no_file, nil}
+  end
+
+  test "a step's own \"error\" key is its result, and the step is done", %{stored: file} do
+    {:ok, file} = analyze(file, [{StorehouseTest.Analyzers.Report, test: self()}])
+    assert_received :report_ran
+    assert Storehouse.File.analyzed(file, "report") == %{"error" => "the scan is blurred"}
+
+    {:ok, _file} = analyze(file, [{StorehouseTest.Analyzers.Report, test: self()}])
+    refute_received :report_ran
   end
 
   test "a file that cannot be read for the steps is an error", %{stored: file} do

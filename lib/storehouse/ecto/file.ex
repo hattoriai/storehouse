@@ -3,7 +3,8 @@ if Code.ensure_loaded?(Ecto.Type) do
     @moduledoc """
     An Ecto type for a stored file (`Storehouse.File`) in a record's column:
     a map (`jsonb` in PostgreSQL) of its key, URL, name, type, size,
-    checksum, width, height and metadata (`Storehouse.Metadata`). No table of files: the record has its file.
+    checksum, width, height, metadata (`Storehouse.Metadata`) and analysis
+    (`Storehouse.Analysis`, each step's as `Storehouse.Analysis.to_map/1`). No table of files: the record has its file.
 
         schema "users" do
           field :avatar, Storehouse.Ecto.File
@@ -36,8 +37,14 @@ if Code.ensure_loaded?(Ecto.Type) do
     def load(_other), do: :error
 
     @impl true
-    def dump(%Storehouse.File{} = file),
-      do: {:ok, file |> Map.take(@fields) |> Map.new(fn {k, v} -> {Atom.to_string(k), v} end)}
+    def dump(%Storehouse.File{} = file) do
+      map = file |> Map.take(@fields) |> Map.new(fn {k, v} -> {Atom.to_string(k), v} end)
+
+      analysis =
+        Map.new(file.analysis || %{}, fn {step, a} -> {step, Storehouse.Analysis.to_map(a)} end)
+
+      {:ok, if(analysis == %{}, do: map, else: Map.put(map, "analysis", analysis))}
+    end
 
     def dump(_other), do: :error
 
@@ -45,14 +52,26 @@ if Code.ensure_loaded?(Ecto.Type) do
     def embed_as(_format), do: :dump
 
     @impl true
-    # The same file, with the same metadata: a caption changed is a change.
+    # The same file, with the same metadata and analysis: a caption changed,
+    # or a step that ran, is a change.
     def equal?(
-          %Storehouse.File{key: key, checksum: sum, metadata: metadata},
-          %Storehouse.File{key: key, checksum: sum, metadata: metadata}
+          %Storehouse.File{key: key, checksum: sum, metadata: metadata, analysis: analysis},
+          %Storehouse.File{key: key, checksum: sum, metadata: metadata, analysis: analysis}
         ),
         do: true
 
     def equal?(a, b), do: a == b
+
+    # Each step's analysis; one the column cannot give back is left out.
+    defp analysis(%{} = steps) do
+      for {step, map} <- steps,
+          analysis = Storehouse.Analysis.from_map(map),
+          not is_nil(analysis),
+          into: %{},
+          do: {step, analysis}
+    end
+
+    defp analysis(_none), do: %{}
 
     defp from_map(map) do
       fields =
@@ -68,7 +87,8 @@ if Code.ensure_loaded?(Ecto.Type) do
               fields
               | name: fields.name || Path.basename(fields.key),
                 metadata: if(is_map(fields.metadata), do: fields.metadata, else: %{})
-            })},
+            })
+            |> Map.put(:analysis, analysis(Map.get(map, "analysis")))},
          else: :error
     end
   end

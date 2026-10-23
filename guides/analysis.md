@@ -3,8 +3,11 @@
 Once a file is stored, an app often wants to know more of it than its
 type and size: an image's EXIF, its main colours, a PDF's pages, a
 video's length. Each is a step, an analyzer of your own or Storehouse's
-(`Storehouse.Analyzer`), and its result is kept in the file's metadata
-under `"analyzed"`. Nothing runs unless you name the steps.
+(`Storehouse.Analyzer`), and what it made of the file is kept in the
+file's `:analysis`, by the step's name: a `Storehouse.Analysis`, with its
+status (`:ok`, `:skipped`, `:failed`), its result, why it failed and when
+it ran. It is apart from the file's metadata, which is the app's alone.
+Nothing runs unless you name the steps.
 
 ## A step
 
@@ -51,9 +54,15 @@ Storehouse.File.analyzed(file, "pages")
 steps that need it, to a temporary file it removes after them.
 
 Each step runs once: a step whose result the file has is skipped
-(`force: true` runs it again). A step that fails, or raises, keeps why
-(`%{"error" => …}`) and leaves the others' results; the next run tries it
-again. `:skip` is kept as `%{"skipped" => true}`.
+(`force: true` runs it again). A step that fails, or raises, is `:failed`, with
+why, and leaves the others' results; the next run tries it again. `:skip`
+is `:skipped`. The result is the step's own map, as it gave it: a key of
+its own named `"error"` is a result like any other.
+
+```elixir
+Storehouse.File.analysis(file, "pages")
+#=> %Storehouse.Analysis{status: :ok, result: %{"pages" => 12}, error: nil, at: ~U[…]}
+```
 
 ## Later, and saved
 
@@ -77,7 +86,7 @@ Storehouse.analyze_later(file, [MyApp.Analyzers.Pages],
 ```
 
 With Ecto, `Storehouse.Ecto` saves them in the record's column: only the
-file's `"analyzed"` metadata, on the row as it is then, so a caption a
+file's analysis, on the row as it is then, so a caption a
 person wrote meanwhile stays. A file replaced in the meantime is left as
 it is.
 
