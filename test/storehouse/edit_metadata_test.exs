@@ -2,6 +2,7 @@ defmodule Storehouse.Analyzer.EditMetadataTest do
   use ExUnit.Case, async: true
 
   alias Storehouse.Analyzer.EditMetadata
+  alias Storehouse.Image.JPEG
   alias Storehouse.Memory
   alias StorehouseTest.Analyzers.Contents
 
@@ -31,7 +32,7 @@ defmodule Storehouse.Analyzer.EditMetadataTest do
 
     edited = stored(file)
     assert edited != original
-    assert {:ok, ^edited} = Storehouse.JPEG.strip(original, :gps)
+    assert {:ok, ^edited} = JPEG.strip(original, :gps)
     assert_received {:contents, path, ^edited}
     refute File.exists?(path)
 
@@ -58,7 +59,8 @@ defmodule Storehouse.Analyzer.EditMetadataTest do
         adapter: Memory
       )
 
-    assert Storehouse.JPEG.tags(stored(file)) == {:ok, %{orientation: 6, artist: "Ana Sousa"}}
+    assert JPEG.tags(stored(file)) ==
+             {:ok, %{orientation: 6, artist: "Ana Sousa"}}
 
     assert %{"stripped" => %{"kept" => ["orientation"]}, "put" => ["artist"]} =
              Storehouse.File.analyzed(file, :edit_metadata)
@@ -100,7 +102,7 @@ defmodule Storehouse.Analyzer.EditMetadataTest do
   defmodule Copy do
     @moduledoc false
     # An editor of the app's: it says it edited the file, and copies it.
-    @behaviour Storehouse.MetadataEditor
+    @behaviour Storehouse.Image.MetadataEditor
 
     @impl true
     def edit(from, to, "image/png", changes) do
@@ -144,6 +146,8 @@ defmodule Storehouse.Analyzer.EditMetadataConfigTest do
   # The app's config is the whole node's.
   use ExUnit.Case, async: false
 
+  alias Storehouse.Image.MetadataEditor
+
   test "the editor of every step, in config" do
     Application.put_env(:storehouse, :metadata_editor, Storehouse.Analyzer.EditMetadataTest.Copy)
     on_exit(fn -> Application.delete_env(:storehouse, :metadata_editor) end)
@@ -154,6 +158,6 @@ defmodule Storehouse.Analyzer.EditMetadataConfigTest do
     {:ok, _file} = Storehouse.store(png, adapter: Storehouse.Memory, analyze: analyze)
     assert_received {:edit, [strip: :gps]}
 
-    assert Storehouse.MetadataEditor.editor(editor: MyEditor) == MyEditor
+    assert MetadataEditor.editor(editor: MyEditor) == MyEditor
   end
 end

@@ -19,11 +19,11 @@ defmodule Storehouse.Analyzer.EditMetadata do
 
   Options:
 
-    * `:strip` - `:gps`, or `{:keep, tags}` (`Storehouse.MetadataEditor`).
+    * `:strip` - `:gps`, or `{:keep, tags}` (`Storehouse.Image.MetadataEditor`).
     * `:put` - tags to write, or remove with `nil`, after `:strip`.
-    * `:editor` - what makes the changes (`Storehouse.MetadataEditor`).
+    * `:editor` - what makes the changes (`Storehouse.Image.MetadataEditor`).
       The default is `config :storehouse, :metadata_editor`, else
-      Storehouse's own, `Storehouse.MetadataEditor.Builtin`, which edits
+      Storehouse's own, `Storehouse.Image.MetadataEditor.Builtin`, which edits
       JPEG, PNG and WebP.
 
   With neither change, or for a type the editor does not edit, the step
@@ -45,6 +45,8 @@ defmodule Storehouse.Analyzer.EditMetadata do
 
   @behaviour Storehouse.Analyzer
 
+  alias Storehouse.Image.MetadataEditor
+
   @impl true
   def name, do: "edit_metadata"
 
@@ -60,7 +62,7 @@ defmodule Storehouse.Analyzer.EditMetadata do
 
   defp edit(file, path, changes, opts) do
     to = Path.join(System.tmp_dir!(), "storehouse-edited-#{System.unique_integer([:positive])}")
-    editor = Storehouse.MetadataEditor.editor(opts)
+    editor = MetadataEditor.editor(opts)
 
     case edited(editor, path, to, file.content_type, changes) do
       :ok ->

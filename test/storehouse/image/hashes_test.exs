@@ -1,13 +1,13 @@
-defmodule Storehouse.HashesTest do
+defmodule Storehouse.Image.HashesTest do
   use ExUnit.Case, async: true
 
   alias Storehouse.Analyzer
   alias Storehouse.Memory
 
-  doctest Storehouse.ThumbHash
-  doctest Storehouse.BlurHash
+  doctest Storehouse.Image.ThumbHash
+  doctest Storehouse.Image.BlurHash
 
-  @fixtures Path.expand("../fixtures", __DIR__)
+  @fixtures Path.expand("../../fixtures", __DIR__)
   # Photographs' pixels, and the hashes the reference implementations make
   # of them.
   @references @fixtures |> Path.join("hashes.json") |> File.read!() |> Storehouse.JSON.decode!()
@@ -30,16 +30,17 @@ defmodule Storehouse.HashesTest do
         rgba = Base.decode64!(image["rgba"])
         rgb = Base.decode64!(image["rgb"])
 
-        assert Base.encode64(Storehouse.ThumbHash.encode(image["w"], image["h"], rgba)) ==
+        assert Base.encode64(Storehouse.Image.ThumbHash.encode(image["w"], image["h"], rgba)) ==
                  image["thumbhash"]
 
-        assert Storehouse.BlurHash.encode(image["w"], image["h"], rgb, 4, 3) == image["blurhash"]
+        assert Storehouse.Image.BlurHash.encode(image["w"], image["h"], rgb, 4, 3) ==
+                 image["blurhash"]
       end
     end
 
     test "a ThumbHash of at most 100 pixels a side" do
       assert_raise FunctionClauseError, fn ->
-        Storehouse.ThumbHash.encode(101, 1, :binary.copy(<<0, 0, 0, 255>>, 101))
+        Storehouse.Image.ThumbHash.encode(101, 1, :binary.copy(<<0, 0, 0, 255>>, 101))
       end
     end
 
@@ -47,7 +48,7 @@ defmodule Storehouse.HashesTest do
       rgb = :binary.copy(<<10, 200, 30>>, 16)
 
       for {x, y} <- [{1, 1}, {4, 3}, {9, 9}] do
-        assert byte_size(Storehouse.BlurHash.encode(4, 4, rgb, x, y)) == 6 + 2 * (x * y - 1)
+        assert byte_size(Storehouse.Image.BlurHash.encode(4, 4, rgb, x, y)) == 6 + 2 * (x * y - 1)
       end
     end
   end

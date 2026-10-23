@@ -2,7 +2,7 @@ if Code.ensure_loaded?(Vix.Vips.Operation) do
   defmodule Storehouse.Analyzer.BlurHash do
     @moduledoc """
     A step (`Storehouse.Analyzer`) that makes a photograph's
-    [BlurHash](https://blurha.sh) (`Storehouse.BlurHash`), under
+    [BlurHash](https://blurha.sh) (`Storehouse.Image.BlurHash`), under
     `"blurhash"`: a string of 20 to 30 characters, kept with the file, that
     a page decodes into a blur.
 
@@ -46,6 +46,7 @@ if Code.ensure_loaded?(Vix.Vips.Operation) do
     @behaviour Storehouse.Analyzer
 
     alias Storehouse.Analyzer.Pixels
+    alias Storehouse.Image.BlurHash, as: Encoder
     alias Vix.Vips.Image
 
     @impl true
@@ -64,7 +65,7 @@ if Code.ensure_loaded?(Vix.Vips.Operation) do
 
         {:ok,
          %{
-           "blurhash" => Storehouse.BlurHash.encode(width, height, pixels, x, y),
+           "blurhash" => Encoder.encode(width, height, pixels, x, y),
            "color" => color,
            "width" => width,
            "height" => height

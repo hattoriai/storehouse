@@ -2,7 +2,7 @@ if Code.ensure_loaded?(Vix.Vips.Operation) do
   defmodule Storehouse.Analyzer.ThumbHash do
     @moduledoc """
     A step (`Storehouse.Analyzer`) that makes a photograph's
-    [ThumbHash](https://evanw.github.io/thumbhash/) (`Storehouse.ThumbHash`),
+    [ThumbHash](https://evanw.github.io/thumbhash/) (`Storehouse.Image.ThumbHash`),
     under `"thumbhash"`: about 25 bytes, kept with the file, that a page
     decodes into a blur of its colours, proportions and transparency.
 
@@ -42,6 +42,7 @@ if Code.ensure_loaded?(Vix.Vips.Operation) do
     @behaviour Storehouse.Analyzer
 
     alias Storehouse.Analyzer.Pixels
+    alias Storehouse.Image.ThumbHash, as: Encoder
     alias Vix.Vips.Image
 
     @impl true
@@ -59,7 +60,7 @@ if Code.ensure_loaded?(Vix.Vips.Operation) do
 
         {:ok,
          %{
-           "thumbhash" => Base.encode64(Storehouse.ThumbHash.encode(width, height, pixels)),
+           "thumbhash" => Base.encode64(Encoder.encode(width, height, pixels)),
            "color" => color,
            "width" => width,
            "height" => height

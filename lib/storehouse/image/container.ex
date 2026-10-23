@@ -1,7 +1,7 @@
-defmodule Storehouse.Container do
+defmodule Storehouse.Image.Container do
   @moduledoc false
-  # What the metadata editors of chunked formats (`Storehouse.PNG`,
-  # `Storehouse.WebP`) share: a file read a chunk at a time, the chunks
+  # What the metadata editors of chunked formats (`Storehouse.Image.PNG`,
+  # `Storehouse.Image.WebP`) share: a file read a chunk at a time, the chunks
   # that hold the image copied by their place in it, never read into
   # memory, and the new file written from the parts.
 

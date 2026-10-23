@@ -1,10 +1,10 @@
-defmodule Storehouse.PNGWebPTest do
+defmodule Storehouse.Image.PNGWebPTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Storehouse.{JPEG, PNG, WebP}
+  alias Storehouse.Image.{JPEG, PNG, WebP}
 
-  @fixtures Path.expand("../fixtures/exif", __DIR__)
+  @fixtures Path.expand("../../fixtures/exif", __DIR__)
   @png File.read!(Path.join(@fixtures, "photo.png"))
   @apng File.read!(Path.join(@fixtures, "animated.png"))
   @webp File.read!(Path.join(@fixtures, "photo.webp"))
@@ -121,7 +121,9 @@ defmodule Storehouse.PNGWebPTest do
       assert Enum.find_index(types, &(&1 == "eXIf")) < Enum.find_index(types, &(&1 == "IDAT"))
 
       {:ok, plain} =
-        PNG.edit(File.read!(Path.expand("../fixtures/small.png", __DIR__)), put: %{artist: "Ana"})
+        PNG.edit(File.read!(Path.expand("../../fixtures/small.png", __DIR__)),
+          put: %{artist: "Ana"}
+        )
 
       assert PNG.tags(plain) == {:ok, %{artist: "Ana"}}
     end
@@ -136,7 +138,7 @@ defmodule Storehouse.PNGWebPTest do
       chunk = <<byte_size(xmp)::32, "iTXt", xmp::binary, :erlang.crc32(["iTXt", xmp])::32>>
 
       <<signature::binary-33, rest::binary>> =
-        File.read!(Path.expand("../fixtures/small.png", __DIR__))
+        File.read!(Path.expand("../../fixtures/small.png", __DIR__))
 
       assert PNG.edit(signature <> chunk <> rest, strip: :gps) == {:error, :malformed_exif}
     end
@@ -246,7 +248,7 @@ defmodule Storehouse.PNGWebPTest do
 
   property "editing a PNG never changes what draws it, and strip(:gps) leaves no GPS" do
     <<signature::binary-33, image::binary>> =
-      File.read!(Path.expand("../fixtures/small.png", __DIR__))
+      File.read!(Path.expand("../../fixtures/small.png", __DIR__))
 
     check all(texts <- list_of(text_chunk(), max_length: 5)) do
       png = signature <> IO.iodata_to_binary(texts) <> image

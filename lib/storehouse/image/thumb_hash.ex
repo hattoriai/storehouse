@@ -1,4 +1,4 @@
-defmodule Storehouse.ThumbHash do
+defmodule Storehouse.Image.ThumbHash do
   @moduledoc """
   [ThumbHash](https://evanw.github.io/thumbhash/): an image's placeholder
   in about 25 bytes, its colours, its proportions and its transparency, for
@@ -15,7 +15,7 @@ defmodule Storehouse.ThumbHash do
   given as RGBA, eight bits a band, row by row.
 
       iex> red = :binary.copy(<<255, 0, 0, 255>>, 4)
-      iex> Storehouse.ThumbHash.encode(2, 2, red) |> Base.encode64()
+      iex> Storehouse.Image.ThumbHash.encode(2, 2, red) |> Base.encode64()
       "1fsrBwB4CIeIiIiHiIiICIiH6OAIDo4A"
   """
   @spec encode(pos_integer(), pos_integer(), binary()) :: binary()

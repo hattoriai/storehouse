@@ -1,4 +1,4 @@
-defmodule Storehouse.BlurHash do
+defmodule Storehouse.Image.BlurHash do
   @moduledoc """
   [BlurHash](https://blurha.sh): an image's placeholder as a short string,
   20 to 30 characters, for a page to decode into a blur (`blurhash` on
@@ -16,7 +16,7 @@ defmodule Storehouse.BlurHash do
   more is more detail, and a longer string. Most use 4 × 3.
 
       iex> red = :binary.copy(<<255, 0, 0>>, 4)
-      iex> Storehouse.BlurHash.encode(2, 2, red, 4, 3)
+      iex> Storehouse.Image.BlurHash.encode(2, 2, red, 4, 3)
       "L~TI:j|cfQ|c|c|cfQ|cfQfQfQfQ"
   """
   @spec encode(pos_integer(), pos_integer(), binary(), 1..9, 1..9) :: String.t()

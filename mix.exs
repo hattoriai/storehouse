@@ -1,7 +1,7 @@
 defmodule Storehouse.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.2.0"
   @source_url "https://github.com/hattoriai/storehouse"
 
   def project do
@@ -109,6 +109,7 @@ defmodule Storehouse.MixProject do
         "guides/analysis.md",
         "guides/variants.md",
         "guides/background.md",
+        "guides/features.md",
         "CHANGELOG.md"
       ],
       groups_for_modules: [
@@ -139,14 +140,16 @@ defmodule Storehouse.MixProject do
           Storehouse.Analyzer.Placeholder,
           Storehouse.Analyzer.ThumbHash,
           Storehouse.Analyzer.BlurHash,
-          Storehouse.ThumbHash,
-          Storehouse.BlurHash,
-          Storehouse.Analyzer.EditMetadata,
-          Storehouse.MetadataEditor,
-          Storehouse.MetadataEditor.Builtin,
-          Storehouse.JPEG,
-          Storehouse.PNG,
-          Storehouse.WebP
+          Storehouse.Analyzer.EditMetadata
+        ],
+        Images: [
+          Storehouse.Image.ThumbHash,
+          Storehouse.Image.BlurHash,
+          Storehouse.Image.MetadataEditor,
+          Storehouse.Image.MetadataEditor.Builtin,
+          Storehouse.Image.JPEG,
+          Storehouse.Image.PNG,
+          Storehouse.Image.WebP
         ],
         Variants: [
           Storehouse.Variants,

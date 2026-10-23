@@ -184,7 +184,7 @@ Storehouse.File.analyzed(file, :blurhash)
 
 ThumbHash is truer to a photograph's colours, and keeps its proportions
 in the hash. BlurHash is the one most services and components already
-know. Their encoders, `Storehouse.ThumbHash` and `Storehouse.BlurHash`,
+know. Their encoders, `Storehouse.Image.ThumbHash` and `Storehouse.Image.BlurHash`,
 give the same bytes as the reference implementations from any pixels.
 They are plain Elixir, for an app that has its pixels from elsewhere.
 
@@ -192,7 +192,7 @@ They are plain Elixir, for an app that has its pixels from elsewhere.
 
 Analysis reads a file and leaves it as it is, with one exception you add
 yourself: `Storehouse.Analyzer.EditMetadata` edits the metadata inside a
-JPEG, PNG or WebP (`Storehouse.JPEG`, `Storehouse.PNG`, `Storehouse.WebP`)
+JPEG, PNG or WebP (`Storehouse.Image.JPEG`, `Storehouse.Image.PNG`, `Storehouse.Image.WebP`)
 and writes the file back over the original.
 It is never run unless named, and it never re-encodes the image: the
 pixels are the same ones, byte for byte. Only the metadata is read into
@@ -214,7 +214,7 @@ and removes XMP, IPTC, comments and other text too. Other formats (HEIC,
 AVIF, TIFF) are skipped, and a file that cannot be read fails the step and
 is left as it was.
 
-What makes the changes is a `Storehouse.MetadataEditor`. Storehouse's
+What makes the changes is a `Storehouse.Image.MetadataEditor`. Storehouse's
 own edits JPEG, PNG and WebP; for other types (HEIC, TIFF, a camera's raw files),
 or another tool altogether, an editor of your app's takes its place, for
 every step or for one, with no other change:
@@ -226,7 +226,7 @@ config :storehouse, :metadata_editor, MyApp.ExifTool
 ```
 
 The changes are the same whichever editor makes them, and
-`Storehouse.MetadataEditor` shows one around ExifTool.
+`Storehouse.Image.MetadataEditor` shows one around ExifTool.
 
 The file's `:checksum` stays the one of the upload, so `:existing` still
 finds the same photo uploaded again. The step's result has the stored

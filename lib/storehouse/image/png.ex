@@ -1,7 +1,7 @@
-defmodule Storehouse.PNG do
+defmodule Storehouse.Image.PNG do
   @moduledoc """
   Edits the metadata inside a PNG without re-encoding it, as
-  `Storehouse.JPEG` does a JPEG's: the same changes, the same tags.
+  `Storehouse.Image.JPEG` does a JPEG's: the same changes, the same tags.
 
   A PNG keeps its metadata in chunks of their own: Exif (`eXIf`), XMP and
   text (`iTXt`, `tEXt`, `zTXt`), the time (`tIME`). These functions
@@ -24,7 +24,7 @@ defmodule Storehouse.PNG do
   Exif cannot be read with `{:error, :malformed_exif}`.
   """
 
-  alias Storehouse.{Container, Exif}
+  alias Storehouse.Image.{Container, Exif}
 
   @signature <<0x89, "PNG\r\n", 0x1A, "\n">>
 
@@ -40,8 +40,8 @@ defmodule Storehouse.PNG do
   @typedoc "Why a PNG is refused."
   @type reason :: :not_png | :malformed | :malformed_exif
 
-  @doc "The PNG with `changes` made (`Storehouse.MetadataEditor`): `:strip`, then `:put`."
-  @spec edit(binary(), Storehouse.MetadataEditor.changes()) ::
+  @doc "The PNG with `changes` made (`Storehouse.Image.MetadataEditor`): `:strip`, then `:put`."
+  @spec edit(binary(), Storehouse.Image.MetadataEditor.changes()) ::
           {:ok, binary()} | {:error, reason()}
   def edit(png, changes) when is_binary(png) and is_list(changes) do
     change = changer(changes)
@@ -59,7 +59,7 @@ defmodule Storehouse.PNG do
   with only its metadata in memory. `:unchanged` when there is nothing to
   change, and `to` is not written.
   """
-  @spec edit_file(Path.t(), Path.t(), Storehouse.MetadataEditor.changes()) ::
+  @spec edit_file(Path.t(), Path.t(), Storehouse.Image.MetadataEditor.changes()) ::
           :ok | :unchanged | {:error, reason() | File.posix()}
   def edit_file(from, to, changes) when is_list(changes) do
     change = changer(changes)
@@ -77,7 +77,7 @@ defmodule Storehouse.PNG do
   end
 
   @doc """
-  The named tags its Exif has (`Storehouse.JPEG.tags/1`), and the text
+  The named tags its Exif has (`Storehouse.Image.JPEG.tags/1`), and the text
   chunks `Author`, `Copyright` and `Description` as `:artist`,
   `:copyright` and `:image_description` where Exif has none.
   """
