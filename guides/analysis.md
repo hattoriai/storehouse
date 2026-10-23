@@ -100,7 +100,7 @@ field in every record of a table, a batch at a time in the order of the
 primary key, so a table of any size takes the memory of a batch:
 
 ```elixir
-Storehouse.Ecto.reprocess(Repo, MyApp.Photo, :image, [MyApp.Analyzers.Placeholder])
+Storehouse.Ecto.reprocess(Repo, MyApp.Photo, :image, [Storehouse.Analyzer.Placeholder])
 #=> {:ok, %{records: 10_000, files: 9_412, skipped: 588, failed: []}}
 ```
 
@@ -112,8 +112,53 @@ the command line, with its progress:
 
 ```sh
 mix storehouse.reprocess --repo MyApp.Repo --schema MyApp.Photo --field image \
-  --step MyApp.Analyzers.Placeholder --now
+  --step Storehouse.Analyzer.Placeholder --now
 ```
+
+## A placeholder while a photograph loads
+
+`Storehouse.Analyzer.Placeholder` makes what a page paints before a
+photograph arrives: a tiny version of it, a few hundred bytes as a data
+URI that the browser stretches into a soft blur, and its average colour.
+It needs libvips, through Vix:
+
+```elixir
+# mix.exs
+{:vix, "~> 0.31"}
+
+Storehouse.store(upload.path, analyze: [Storehouse.Analyzer.Placeholder])
+
+Storehouse.File.analyzed(file, :placeholder)
+#=> %{"placeholder" => "data:image/webp;base64,UklGR…", "color" => "#9a7b76",
+#     "width" => 16, "height" => 11}
+```
+
+It shrinks the photograph as libvips loads it, so a 6000 × 4000 JPEG
+(18 MB) takes about 150 ms where decoding it whole takes 260, and a few
+kilobytes of memory past what the decoder holds. It is turned as its EXIF
+says, put in sRGB, and saved with none of the original's metadata: no
+place, no camera, no colour profile. Its options say how large (`:size`,
+16 pixels on the longest edge), in what (`:format`, `:webp`, `:jpeg` or
+`:png`; `:quality`, 40), and on what colour a photograph with
+transparency is laid (`:background`, `"#rrggbb"`); without it, WebP and
+PNG keep the transparency.
+
+A file libvips cannot read fails the step, with why, and the page shows
+its colour of choice instead. Which formats it reads is libvips's: the
+precompiled one Vix brings reads JPEG, PNG, WebP, TIFF, GIF and AVIF, not
+HEIC; build Vix against your system's libvips for more.
+
+In a page, under the photograph:
+
+```heex
+<img src={@photo.url} width={@photo.width} height={@photo.height} loading="lazy"
+     style={"background: #{@photo.color} url(#{@photo.placeholder}) center / cover"} />
+```
+
+and in JSON, for a frontend, with `Storehouse.File.to_map(file, analysis:
+[:placeholder])`. A step of your own, under its own name, takes its place
+for anything else: a BlurHash or ThumbHash, made with the library you
+choose.
 
 ## A step that changes the file
 
