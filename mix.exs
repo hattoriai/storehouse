@@ -64,6 +64,8 @@ defmodule Storehouse.MixProject do
       {:phoenix_live_view, "~> 1.1", optional: true},
       {:plug, "~> 1.15"},
       {:telemetry, "~> 1.0"},
+      # Storehouse.Analyzer.Placeholder: libvips. Optional.
+      {:vix, "~> 0.31", optional: true},
       # A web server for the tests of fetch/2.
       {:bandit, "~> 1.5", only: :test},
       {:stream_data, "~> 1.1", only: :test}
@@ -129,6 +131,7 @@ defmodule Storehouse.MixProject do
           Storehouse.Analyzer,
           Storehouse.Analysis,
           Storehouse.Analyzer.Size,
+          Storehouse.Analyzer.Placeholder,
           Storehouse.Analyzer.EditMetadata,
           Storehouse.MetadataEditor,
           Storehouse.MetadataEditor.Builtin,
