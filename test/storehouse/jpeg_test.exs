@@ -283,6 +283,37 @@ defmodule Storehouse.JPEGTest do
     end
   end
 
+  describe "edit_file/3" do
+    @tag :tmp_dir
+    test "writes what edit/2 gives, reading only the metadata", %{tmp_dir: dir} do
+      changes = [put: %{artist: "Ana"}, strip: :gps]
+
+      for {name, jpeg} <- [camera: @camera, phone: @phone] do
+        from = Path.join(dir, "#{name}.jpg")
+        to = Path.join(dir, "#{name}-edited.jpg")
+        File.write!(from, jpeg)
+
+        assert JPEG.edit_file(from, to, changes) == :ok
+        assert {:ok, File.read!(to)} == JPEG.edit(jpeg, changes)
+        assert File.read!(from) == jpeg
+      end
+    end
+
+    @tag :tmp_dir
+    test "nothing to change, a file cut short, and no file", %{tmp_dir: dir} do
+      from = Path.join(dir, "harbour.jpg")
+      to = Path.join(dir, "out.jpg")
+      File.write!(from, @harbour)
+
+      assert JPEG.edit_file(from, to, strip: :gps) == :unchanged
+      refute File.exists?(to)
+
+      File.write!(from, binary_part(@camera, 0, 100))
+      assert JPEG.edit_file(from, to, strip: :gps) == {:error, :malformed}
+      assert JPEG.edit_file(Path.join(dir, "none.jpg"), to, strip: :gps) == {:error, :enoent}
+    end
+  end
+
   describe "what it refuses" do
     test "not a JPEG" do
       png = File.read!(Path.expand("../fixtures/small.png", __DIR__))

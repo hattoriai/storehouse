@@ -86,6 +86,32 @@ defmodule Storehouse.Analyzer.EditMetadataTest do
     assert stored(png) == File.read!(@png)
   end
 
+  defmodule Copy do
+    @moduledoc false
+    # An editor of the app's: it says it edited the file, and copies it.
+    @behaviour Storehouse.MetadataEditor
+
+    @impl true
+    def edit(from, to, "image/png", changes) do
+      send(self(), {:edit, changes})
+      File.cp!(from, to)
+      :ok
+    end
+
+    def edit(_from, _to, _type, _changes), do: :unsupported
+  end
+
+  test "another editor, as the step's: its types, and an edit that changed no byte" do
+    {:ok, png} = store(@png, [{EditMetadata, strip: :gps, put: %{artist: "Ana"}, editor: Copy}])
+
+    assert_received {:edit, [strip: :gps, put: %{artist: "Ana"}]}
+    assert Storehouse.File.analyzed(png, :edit_metadata) == %{"changed" => false}
+    assert stored(png) == File.read!(@png)
+
+    {:ok, jpeg} = store(@camera, [{EditMetadata, strip: :gps, editor: Copy}])
+    assert %Storehouse.Analysis{status: :skipped} = Storehouse.File.analysis(jpeg, :edit_metadata)
+  end
+
   test "a JPEG it cannot read fails the step, and is left as it was" do
     broken = Path.join(System.tmp_dir!(), "broken-#{System.unique_integer([:positive])}.jpg")
     jpeg = File.read!(@camera)
@@ -100,5 +126,23 @@ defmodule Storehouse.Analyzer.EditMetadataTest do
              Storehouse.File.analysis(file, :edit_metadata)
 
     assert stored(file) == File.read!(broken)
+  end
+end
+
+defmodule Storehouse.Analyzer.EditMetadataConfigTest do
+  # The app's config is the whole node's.
+  use ExUnit.Case, async: false
+
+  test "the editor of every step, in config" do
+    Application.put_env(:storehouse, :metadata_editor, Storehouse.Analyzer.EditMetadataTest.Copy)
+    on_exit(fn -> Application.delete_env(:storehouse, :metadata_editor) end)
+    Storehouse.Memory.checkout()
+
+    png = Path.expand("../fixtures/small.png", __DIR__)
+    analyze = [{Storehouse.Analyzer.EditMetadata, strip: :gps}]
+    {:ok, _file} = Storehouse.store(png, adapter: Storehouse.Memory, analyze: analyze)
+    assert_received {:edit, [strip: :gps]}
+
+    assert Storehouse.MetadataEditor.editor(editor: MyEditor) == MyEditor
   end
 end

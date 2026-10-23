@@ -236,7 +236,7 @@ another library is welcome as an issue.
 | LiveView uploads | Yes | No | No | Partly | No |
 | Reading a file back | Yes | Yes | Yes | Yes | Yes |
 | A file's own metadata | Yes, kept apart from the analysis's | No | Yes | Yes | Yes, shared with the analysis's |
-| A photo's location removed, its credit written, without re-encoding | Yes, a step you add (JPEG) | Only by re-encoding, with ImageMagick | No | Only by re-encoding | Only by re-encoding |
+| A photo's location removed, its credit written, without re-encoding | Yes, a step you add: JPEG built in, an editor of yours (ExifTool) for other types | Only by re-encoding, with ImageMagick | No | Only by re-encoding | Only by re-encoding |
 | Several stores at once | Not yet ([#1](https://github.com/hattoriai/storehouse/issues/1)) | Per uploader | Per file | Yes | One at a time |
 | Work after the upload, analysis | Yes: steps of your own, in a process of your app's or in Oban | No | No | Yes | Yes, on Oban |
 | Variants | Not yet ([#6](https://github.com/hattoriai/storehouse/issues/6)) | Made at upload | No | Yes | On demand |

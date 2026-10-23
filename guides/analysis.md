@@ -106,7 +106,9 @@ Analysis reads a file and leaves it as it is, with one exception you add
 yourself: `Storehouse.Analyzer.EditMetadata` edits the metadata inside a
 JPEG (`Storehouse.JPEG`) and writes the file back over the original.
 It is never run unless named, and it never re-encodes the image: the
-pixels are the same ones, byte for byte.
+pixels are the same ones, byte for byte. Only the metadata is read into
+memory; the image data is copied from file to file, so a 50 MB photo
+takes the memory of its metadata.
 
 ```elixir
 steps = [
@@ -122,6 +124,20 @@ Storehouse.store(upload.path, analyze: steps)
 and removes XMP, IPTC and comments too. Other formats (PNG, WebP, HEIC)
 are skipped, and a JPEG that cannot be read fails the step and is left as
 it was.
+
+What makes the changes is a `Storehouse.MetadataEditor`. Storehouse's
+own edits JPEG; for other types (HEIC, TIFF, a camera's raw files),
+or another tool altogether, an editor of your app's takes its place, for
+every step or for one, with no other change:
+
+```elixir
+config :storehouse, :metadata_editor, MyApp.ExifTool
+
+{Storehouse.Analyzer.EditMetadata, strip: :gps, editor: MyApp.ExifTool}
+```
+
+The changes are the same whichever editor makes them, and
+`Storehouse.MetadataEditor` shows one around ExifTool.
 
 The file's `:checksum` stays the one of the upload, so `:existing` still
 finds the same photo uploaded again. The step's result has the stored

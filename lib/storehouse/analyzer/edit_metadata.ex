@@ -1,8 +1,8 @@
 defmodule Storehouse.Analyzer.EditMetadata do
   @moduledoc """
   A step (`Storehouse.Analyzer`) that edits the metadata inside a stored
-  JPEG without re-encoding it (`Storehouse.JPEG`), and writes the edited
-  file back over the original, under `"edit_metadata"`.
+  file without re-encoding it, and writes the edited file back over the
+  original, under `"edit_metadata"`.
 
   It does nothing unless asked: an app adds it to its steps, with what to
   change.
@@ -19,13 +19,16 @@ defmodule Storehouse.Analyzer.EditMetadata do
 
   Options:
 
-    * `:strip` - `:gps`, or `{:keep, tags}` (`Storehouse.JPEG.strip/2`).
-    * `:put` - tags to write, or remove with `nil`
-      (`Storehouse.JPEG.put_tags/2`), after `:strip`.
+    * `:strip` - `:gps`, or `{:keep, tags}` (`Storehouse.MetadataEditor`).
+    * `:put` - tags to write, or remove with `nil`, after `:strip`.
+    * `:editor` - what makes the changes (`Storehouse.MetadataEditor`).
+      The default is `config :storehouse, :metadata_editor`, else
+      Storehouse's own, `Storehouse.MetadataEditor.Builtin`, which edits
+      JPEG.
 
-  With neither, or for a file that is not a JPEG (PNG, WebP, HEIC are
-  left as they are), the step is `:skipped`. A JPEG it cannot read fails
-  the step, with why, and the stored file is left as it was.
+  With neither change, or for a type the editor does not edit, the step
+  is `:skipped` and the file left as it is. A file the editor cannot read
+  fails the step, with why, and the stored file is left as it was.
 
   Its result: `"changed"`, whether the file was rewritten; and when it
   was, its `"bytes"` and `"checksum"` now, and what was done
@@ -46,62 +49,75 @@ defmodule Storehouse.Analyzer.EditMetadata do
   def name, do: "edit_metadata"
 
   @impl true
-  def analyze(%Storehouse.File{content_type: "image/jpeg"} = file, path, opts) do
-    strip = opts[:strip]
-    put = opts[:put] || %{}
+  def analyze(%Storehouse.File{} = file, path, opts) do
+    changes =
+      Enum.reject([strip: opts[:strip], put: opts[:put]], fn {_change, value} ->
+        value in [nil, %{}]
+      end)
 
-    if strip == nil and put == %{},
-      do: :skip,
-      else: edit(file, path, strip, put, opts[:adapter])
+    if changes == [], do: :skip, else: edit(file, path, changes, opts)
   end
 
-  def analyze(_file, _path, _opts), do: :skip
+  defp edit(file, path, changes, opts) do
+    to = Path.join(System.tmp_dir!(), "storehouse-edited-#{System.unique_integer([:positive])}")
+    editor = Storehouse.MetadataEditor.editor(opts)
 
-  defp edit(file, path, strip, put, adapter) do
-    with {:ok, original} <- File.read(path),
-         {:ok, edited} <- stripped(original, strip),
-         {:ok, edited} <- Storehouse.JPEG.put_tags(edited, put) do
-      if edited == original,
-        do: {:ok, %{"changed" => false}},
-        else: write(file, edited, adapter, done(strip, put))
+    case edited(editor, path, to, file.content_type, changes) do
+      :ok ->
+        written(file, path, to, changes, opts[:adapter])
+
+      :unchanged ->
+        {:ok, %{"changed" => false}}
+
+      :unsupported ->
+        :skip
+
+      {:error, reason} ->
+        File.rm(to)
+        {:error, reason}
     end
   end
 
-  defp stripped(jpeg, nil), do: {:ok, jpeg}
-  defp stripped(jpeg, strip), do: Storehouse.JPEG.strip(jpeg, strip)
+  # An editor that raises leaves no file behind.
+  defp edited(editor, path, to, content_type, changes) do
+    editor.edit(path, to, content_type, changes)
+  rescue
+    exception ->
+      File.rm(to)
+      reraise exception, __STACKTRACE__
+  end
 
-  defp done(strip, put) do
+  # The edited file over the original, from the temporary file the steps
+  # after this one read; unless the edit changed no byte.
+  defp written(file, path, to, changes, adapter) do
+    checksum = Storehouse.checksum(to)
+
+    with false <- checksum == Storehouse.checksum(path),
+         bytes = File.stat!(to).size,
+         meta = %{content_type: file.content_type, bytes: bytes, checksum: checksum},
+         {:ok, _url} <- adapter.put(file.key, to, meta) do
+      done = %{"changed" => true, "bytes" => bytes, "checksum" => checksum}
+      {:ok, Map.merge(done(changes), done), to}
+    else
+      true ->
+        File.rm(to)
+        {:ok, %{"changed" => false}}
+
+      {:error, reason} ->
+        File.rm(to)
+        {:error, reason}
+    end
+  end
+
+  defp done(changes) do
     %{
       "stripped" =>
-        case strip do
+        case changes[:strip] do
           nil -> nil
           :gps -> "gps"
           {:keep, tags} -> %{"kept" => Enum.map(tags, &Atom.to_string/1)}
         end,
-      "put" => put |> Map.keys() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
+      "put" => (changes[:put] || %{}) |> Map.keys() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
     }
-  end
-
-  # The edited file over the original, from a temporary file the steps
-  # after this one read.
-  defp write(file, edited, adapter, done) do
-    path =
-      Path.join(System.tmp_dir!(), "storehouse-edited-#{System.unique_integer([:positive])}")
-
-    checksum = Base.encode64(:crypto.hash(:sha256, edited))
-    meta = %{content_type: file.content_type, bytes: byte_size(edited), checksum: checksum}
-    File.write!(path, edited)
-
-    case adapter.put(file.key, path, meta) do
-      {:ok, _url} ->
-        result =
-          Map.merge(done, %{"changed" => true, "bytes" => meta.bytes, "checksum" => checksum})
-
-        {:ok, result, path}
-
-      {:error, reason} ->
-        File.rm(path)
-        {:error, reason}
-    end
   end
 end

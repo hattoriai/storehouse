@@ -15,9 +15,12 @@ defmodule Storehouse.JPEG do
       {:ok, jpeg} = Storehouse.JPEG.strip(jpeg, {:keep, [:orientation, :copyright]})
       {:ok, jpeg} = Storehouse.JPEG.put_tags(jpeg, %{artist: "Ana Sousa", copyright: "© Ana Sousa"})
 
+  `edit_file/3` does the same from a file to a file, with only the
+  metadata in memory: what `Storehouse.MetadataEditor.Builtin`, the
+  default editor of the `Storehouse.Analyzer.EditMetadata` step, uses.
+
   Nothing in Storehouse calls these on its own: a stored file's bytes
-  change only when the app asks, with these functions or the
-  `Storehouse.Analyzer.EditMetadata` step.
+  change only when the app asks, with these functions or that step.
 
   ## Tags
 
@@ -112,14 +115,7 @@ defmodule Storehouse.JPEG do
   A JPEG with nothing to remove is given back as it was, byte for byte.
   """
   @spec strip(binary(), :gps | {:keep, [tag()]}) :: {:ok, binary()} | {:error, reason()}
-  def strip(jpeg, :gps) when is_binary(jpeg) do
-    edit(jpeg, fn segments -> Enum.flat_map(segments, &strip_gps/1) end)
-  end
-
-  def strip(jpeg, {:keep, tags}) when is_binary(jpeg) and is_list(tags) do
-    {ifd0, exif} = codes(tags)
-    edit(jpeg, fn segments -> Enum.flat_map(segments, &keep(&1, ifd0, exif)) end)
-  end
+  def strip(jpeg, what) when is_binary(jpeg), do: edit(jpeg, strip: what)
 
   @doc """
   The JPEG with these tags written, or removed when `nil`: `:artist`,
@@ -139,9 +135,75 @@ defmodule Storehouse.JPEG do
   """
   @spec put_tags(binary(), %{optional(tag()) => String.t() | nil}) ::
           {:ok, binary()} | {:error, reason()}
-  def put_tags(jpeg, tags) when is_binary(jpeg) and is_map(tags) do
-    Enum.each(tags, &writable!/1)
-    edit(jpeg, &put_exif(&1, tags))
+  def put_tags(jpeg, tags) when is_binary(jpeg) and is_map(tags), do: edit(jpeg, put: tags)
+
+  @doc """
+  The JPEG with `changes` made: `:strip` (as `strip/2`), then `:put` (as
+  `put_tags/2`).
+  """
+  @spec edit(binary(), Storehouse.MetadataEditor.changes()) ::
+          {:ok, binary()} | {:error, reason()}
+  def edit(jpeg, changes) when is_binary(jpeg) and is_list(changes) do
+    change = changer(changes)
+
+    with {:ok, segments, tail} <- parse(jpeg),
+         {:ok, edited} <- safely(fn -> {:ok, change.(segments)} end) do
+      if edited == segments,
+        do: {:ok, jpeg},
+        else: encode(mpf_moved(segments, edited), tail)
+    end
+  end
+
+  @doc """
+  The JPEG at `from`, with `changes` made (as `edit/2`), written to `to`.
+
+  Only its metadata is read into memory: the image data, most of the
+  file, is copied from file to file, so a photo of any size takes the
+  memory of its metadata. `:unchanged` when there is nothing to change,
+  and `to` is not written.
+  """
+  @spec edit_file(Path.t(), Path.t(), Storehouse.MetadataEditor.changes()) ::
+          :ok | :unchanged | {:error, reason() | File.posix()}
+  def edit_file(from, to, changes) when is_list(changes) do
+    change = changer(changes)
+
+    case File.open(from, [:read, :raw, :binary, :read_ahead], &edit_into(&1, to, change)) do
+      {:ok, result} -> result
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp edit_into(input, to, change) do
+    with {:ok, segments, image_at} <- read_head(input),
+         {:ok, edited} <- safely(fn -> {:ok, change.(segments)} end) do
+      if edited == segments,
+        do: :unchanged,
+        else: write_file(input, image_at, mpf_moved(segments, edited), to)
+    end
+  end
+
+  # The changes as one function of the segments, checked before a byte is
+  # read: what to strip, then what to write.
+  defp changer(changes) do
+    steps =
+      Enum.map(changes, fn
+        {:strip, :gps} ->
+          {0, &Enum.flat_map(&1, fn segment -> strip_gps(segment) end)}
+
+        {:strip, {:keep, tags}} when is_list(tags) ->
+          {ifd0, exif} = codes(tags)
+          {0, &Enum.flat_map(&1, fn segment -> keep(segment, ifd0, exif) end)}
+
+        {:put, tags} when is_map(tags) ->
+          Enum.each(tags, &writable!/1)
+          {1, &put_exif(&1, tags)}
+
+        other ->
+          raise ArgumentError, "Storehouse.JPEG makes no change #{inspect(other)}"
+      end)
+
+    funs = steps |> Enum.sort_by(&elem(&1, 0)) |> Enum.map(&elem(&1, 1))
+    fn segments -> Enum.reduce(funs, segments, & &1.(&2)) end
   end
 
   @doc """
@@ -181,19 +243,74 @@ defmodule Storehouse.JPEG do
 
   defp segments(_other, _acc), do: {:error, :malformed}
 
-  defp edit(jpeg, fun) do
-    with {:ok, segments, tail} <- parse(jpeg),
-         {:ok, edited} <- safely(fn -> {:ok, fun.(segments)} end) do
-      if edited == segments,
-        do: {:ok, jpeg},
-        else: encode(mpf_moved(segments, edited), tail)
+  # The same segments, read from a file: up to the image data, and where
+  # it starts.
+  defp read_head(io) do
+    case :file.read(io, 2) do
+      {:ok, <<0xFF, 0xD8>>} -> read_segments(io, 2, [])
+      _other -> {:error, :not_jpeg}
     end
   end
 
+  defp read_segments(io, at, acc) do
+    case :file.read(io, 2) do
+      {:ok, <<0xFF, 0xFF>>} ->
+        {:ok, _at} = :file.position(io, at + 1)
+        read_segments(io, at + 1, acc)
+
+      {:ok, <<0xFF, marker>>} when marker in [0xDA, 0xD9] ->
+        {:ok, Enum.reverse(acc), at}
+
+      {:ok, <<0xFF, marker>>} when marker == 0x01 or marker in 0xD0..0xD7 ->
+        read_segments(io, at + 2, [{marker, nil} | acc])
+
+      {:ok, <<0xFF, marker>>} ->
+        read_segment(io, at, marker, acc)
+
+      _other ->
+        {:error, :malformed}
+    end
+  end
+
+  defp read_segment(io, at, marker, acc) do
+    with {:ok, <<length::16>>} when length >= 2 <- :file.read(io, 2),
+         {:ok, payload} <- read_exact(io, length - 2) do
+      read_segments(io, at + 2 + length, [{marker, payload} | acc])
+    else
+      _short -> {:error, :malformed}
+    end
+  end
+
+  defp read_exact(_io, 0), do: {:ok, ""}
+
+  defp read_exact(io, size) do
+    case :file.read(io, size) do
+      {:ok, bytes} when byte_size(bytes) == size -> {:ok, bytes}
+      _short -> :error
+    end
+  end
+
+  # The new segments, then the image data copied as it is.
+  defp write_file(input, image_at, segments, to) do
+    with {:ok, head} <- encode_head(segments),
+         {:ok, ^image_at} <- :file.position(input, image_at),
+         {:ok, {:ok, _bytes}} <- File.open(to, [:write, :raw, :binary], &copy(&1, head, input)) do
+      :ok
+    end
+  end
+
+  defp copy(output, head, input) do
+    with :ok <- :file.write(output, head), do: :file.copy(input, output)
+  end
+
   defp encode(segments, tail) do
+    with {:ok, head} <- encode_head(segments), do: {:ok, IO.iodata_to_binary([head, tail])}
+  end
+
+  defp encode_head(segments) do
     if Enum.any?(segments, fn {_marker, payload} -> byte_size(payload || "") > 65_533 end),
       do: {:error, :exif_too_large},
-      else: {:ok, IO.iodata_to_binary([<<0xFF, 0xD8>>, Enum.map(segments, &segment/1), tail])}
+      else: {:ok, IO.iodata_to_binary([<<0xFF, 0xD8>>, Enum.map(segments, &segment/1)])}
   end
 
   defp segment({marker, nil}), do: <<0xFF, marker>>
