@@ -110,7 +110,48 @@ awslocal s3api put-bucket-cors --bucket uploads --cors-configuration file://cors
 with the CORS rule of [Direct uploads](direct_uploads.md), for the
 origin of your development server (`http://localhost:4000`).
 
-In tests, the local disk, in a directory of the test's own:
+## In tests
+
+`Storehouse.Memory` keeps files in memory, each test's its own, so tests
+run with `async: true` never see each other's files:
+
+```elixir
+# config/test.exs
+config :storehouse, adapter: Storehouse.Memory
+
+# test/test_helper.exs
+{:ok, _pid} = Storehouse.Memory.start_link()
+ExUnit.start()
+
+# test/support/data_case.ex, in its setup
+Storehouse.Memory.checkout()
+```
+
+A task the test starts sees its files; another process, once
+`Storehouse.Memory.allow/2` lets it (a LiveView's process, as Ecto's
+sandbox does). `Storehouse.Test` asserts on what was stored, and
+`Storehouse.Memory.fail_next/2` makes the next call of a callback fail:
+
+```elixir
+import Storehouse.Test
+
+test "the avatar is stored", %{user: user} do
+  {:ok, user} = Accounts.update_avatar(user, upload)
+  assert_stored user.avatar.key
+end
+
+test "a store that fails", %{user: user} do
+  Storehouse.Memory.fail_next(:put, :unavailable)
+  assert {:error, _reason} = Accounts.update_avatar(user, upload)
+end
+```
+
+An upload straight to the store has no server to go to: make the
+browser's part of it with `Storehouse.Memory.put_upload/2`, then verify it
+as in production.
+
+The local disk, in a directory of the test's own, works too, for tests
+that serve files through `Storehouse.Local.Plug`:
 
 ```elixir
 # config/test.exs

@@ -84,6 +84,9 @@ It gives your app:
   you take;
 * **checksums**: each file's SHA-256, kept with it, and checked by S3 as
   it takes the file;
+* **tests that need no store**: `Storehouse.Memory`, in memory, each
+  test's files its own under `async: true`, with assertions
+  (`Storehouse.Test`) and failures on demand;
 * **telemetry**: `:telemetry` spans for storing, fetching, signing,
   checking, reading and deleting, with what was refused and why;
 * **previews**: a function of yours gives a smaller image of a file (a
@@ -214,6 +217,7 @@ another library is welcome as an issue.
 | The same file uploaded again is the one kept | Not yet ([#15](https://github.com/hattoriai/storehouse/issues/15)) | No | No | No | No |
 | Endpoints and a client for frontends without LiveView | Not yet ([#10](https://github.com/hattoriai/storehouse/issues/10), [#11](https://github.com/hattoriai/storehouse/issues/11)) | No | No | Presign and complete | No |
 | Resumable and multipart uploads from the browser | Not yet ([#12](https://github.com/hattoriai/storehouse/issues/12)) | No | No | No | No |
+| A store in memory, for async tests | Yes, with assertions | No | Yes | Yes | No |
 | Dependencies | None | Req, ImageMagick | None | Several | Oban, Vix |
 
 ## Roadmap
