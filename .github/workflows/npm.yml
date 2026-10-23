@@ -1,0 +1,39 @@
+name: npm
+
+# Publishes the JavaScript of Storehouse (the LiveView uploader, and the
+# upload client once it is there) to npm as @hattoriai/storehouse, when a
+# release is published. Needs the repository secret NPM_TOKEN: an npm
+# automation token that may publish @hattoriai/storehouse.
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # npm's provenance: the package says which workflow built it.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # The release's tag, package.json and mix.exs name one version.
+      - name: one version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          npm_version="$(node -p 'require("./package.json").version')"
+          mix_version="$(sed -n 's/^  @version "\(.*\)"$/\1/p' mix.exs)"
+          echo "tag $tag, package.json $npm_version, mix.exs $mix_version"
+          test "$tag" = "$npm_version" && test "$tag" = "$mix_version"
+
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

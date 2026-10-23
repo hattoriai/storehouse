@@ -82,6 +82,10 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   `presign_upload/4`'s `:checksum` (hex or Base64,
   `Storehouse.claimed_checksum/1`) signs the upload with it: S3, the local
   plug and `Storehouse.Memory` take only those bytes.
+- The JavaScript is on npm as `@hattoriai/storehouse` (the name
+  `storehouse` there is another's), published from CI when a release is
+  published, with provenance; a Phoenix app imports it from
+  `deps/storehouse` as before.
 
 ### Changed
 
