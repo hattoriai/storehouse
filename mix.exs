@@ -52,7 +52,7 @@ defmodule Storehouse.MixProject do
       {:ecto, "~> 3.12", optional: true},
       # Storehouse.File as JSON with Jason, beside Elixir's own JSON. Optional.
       {:jason, "~> 1.4", optional: true},
-      # Storehouse.analyze_later/3 with runner: :oban. Optional.
+      # Storehouse.Runner.Oban, the runner of Storehouse's jobs in Oban. Optional.
       {:oban, "~> 2.19", optional: true},
       {:ecto_sql, "~> 3.12", optional: true},
       {:postgrex, "~> 0.19", only: :test},
@@ -64,6 +64,9 @@ defmodule Storehouse.MixProject do
       {:phoenix_live_view, "~> 1.1", optional: true},
       {:plug, "~> 1.15"},
       {:telemetry, "~> 1.0"},
+      # The placeholders (Storehouse.Analyzer.Placeholder, ThumbHash, BlurHash)
+      # and Storehouse.Renderer.Vix: libvips. Optional.
+      {:vix, "~> 0.31", optional: true},
       # A web server for the tests of fetch/2.
       {:bandit, "~> 1.5", only: :test},
       {:stream_data, "~> 1.1", only: :test}
@@ -101,25 +104,90 @@ defmodule Storehouse.MixProject do
         "guides/private_files.md",
         "guides/ecto.md",
         "guides/analysis.md",
+        "guides/variants.md",
+        "guides/background.md",
         "CHANGELOG.md"
       ],
       groups_for_modules: [
-        Files: [Storehouse, Storehouse.File, Storehouse.Check, Storehouse.ReadError],
-        Stores: [Storehouse.Adapter, Storehouse.Local, Storehouse.Local.Plug, Storehouse.S3],
+        Files: [
+          Storehouse,
+          Storehouse.File,
+          Storehouse.Check,
+          Storehouse.ReadError
+        ],
+        Archives: [
+          Storehouse.Archive,
+          Storehouse.Archive.Format,
+          Storehouse.Archive.Entry,
+          Storehouse.Archive.Zip,
+          Storehouse.Archive.Tar
+        ],
+        Stores: [
+          Storehouse.Adapter,
+          Storehouse.Local,
+          Storehouse.Local.Plug,
+          Storehouse.S3,
+          Storehouse.Mirror
+        ],
         Analysis: [
           Storehouse.Analyzer,
           Storehouse.Analysis,
           Storehouse.Analyzer.Size,
-          Storehouse.Tasks,
-          Storehouse.Oban.Analyze
+          Storehouse.Analyzer.Placeholder,
+          Storehouse.Analyzer.ThumbHash,
+          Storehouse.Analyzer.BlurHash,
+          Storehouse.ThumbHash,
+          Storehouse.BlurHash,
+          Storehouse.Analyzer.EditMetadata,
+          Storehouse.MetadataEditor,
+          Storehouse.MetadataEditor.Builtin,
+          Storehouse.JPEG,
+          Storehouse.PNG,
+          Storehouse.WebP
         ],
-        Cleanup: [Storehouse.Cleaner],
+        Variants: [
+          Storehouse.Variants,
+          Storehouse.Variants.Plug,
+          Storehouse.Variant,
+          Storehouse.Responsive,
+          Storehouse.Components,
+          Storehouse.Analyzer.Warm,
+          Storehouse.Renderer,
+          Storehouse.Renderer.Vix,
+          Storehouse.Renderer.Imgproxy
+        ],
+        "Work out of the request": [
+          Storehouse.Runner,
+          Storehouse.Job,
+          Storehouse.Runner.Oban,
+          Storehouse.Runner.Oban.Worker,
+          Storehouse.Runner.Memory
+        ],
+        Cleanup: [Storehouse.Sweeper],
         Events: [Storehouse.Notify, Storehouse.Notify.PubSub],
         Tests: [Storehouse.Memory, Storehouse.Test],
-        "Private files": [Storehouse.Redirect],
-        "Any client": [Storehouse.Batch, Storehouse.Plug.Presign, Storehouse.Plug.Register],
+        "Private files": [Storehouse.Redirect, Storehouse.Proxy],
+        "A CDN in front": [Storehouse.Purge, Storehouse.Purge.Cloudflare],
+        "Resumable uploads (tus)": [
+          Storehouse.Tus.Plug,
+          Storehouse.Tus,
+          Storehouse.Tus.State,
+          Storehouse.Tus.State.ETS
+        ],
+        "Any client": [
+          Storehouse.Batch,
+          Storehouse.Plug.Presign,
+          Storehouse.Plug.Register,
+          Storehouse.Plug.Multipart
+        ],
         LiveView: [Storehouse.Live, Storehouse.Live.Writer],
-        Ecto: [Storehouse.Ecto, Storehouse.Ecto.File]
+        Ecto: [Storehouse.Ecto, Storehouse.Ecto.File],
+        "A library of files": [
+          Storehouse.Ecto.Blob,
+          Storehouse.Ecto.Blob.Schema,
+          Storehouse.Ecto.Usage,
+          Storehouse.Ecto.Migrations
+        ]
       ]
     ]
   end

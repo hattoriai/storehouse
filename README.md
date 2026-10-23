@@ -50,11 +50,21 @@ It gives your app:
   (Cloudflare R2, MinIO, Tigris, LocalStack), with no other library; or
   one of your own, in three callbacks; and as many of each as you need
   (`use Storehouse.S3`), a store per Ecto field;
+* **moving between stores**: files copied from one store to another,
+  in the store itself where it can, run again to copy only what is
+  missing (`mix storehouse.copy`), and a mirror that writes to a second
+  store as well, for moving to another provider without stopping;
 * **uploads straight to the store**: the browser sends a file to the
   bucket at a URL your app signed (its type, its size, ten minutes), so a
   large file never goes through your app, and Storehouse checks it there
   by its first bytes; in development, to your app's own plug, the same
   way;
+* **very large files in parts**, from the browser straight to the bucket,
+  a few at a time, each checked by its checksum and tried again on its
+  own, carried on from where they stopped after a reload, then put
+  together and checked by the app; or through the app by the tus
+  protocol, for the clients that speak it (Uppy, tus-js-client, mobile),
+  into the bucket a part at a time;
 * **uploads streamed through your app** with no file on its disk: to S3
   in the parts of a multipart upload as the chunks come, checked by their
   first bytes on the way, two parts in flight from a process of their
@@ -63,10 +73,18 @@ It gives your app:
   no table of files; an upload is temporary until its record is saved,
   made permanent then by a copy in the store, and a bucket's lifecycle
   rule deletes those of forms never saved; files replaced or removed are
-  deleted once the database has the change;
+  deleted once the database has the change; or, for files many records
+  use, an optional library of them, the same file one row, each record's
+  files kept as it is saved, and a file in use never deleted;
 * **private files**: signed URLs that expire, from S3 or the local plug,
-  and `Storehouse.Redirect`, a lasting URL of your app that checks the
-  person and redirects to a fresh one;
+  `Storehouse.Redirect`, a lasting URL of your app that checks the
+  person and redirects to a fresh one, and `Storehouse.Proxy`, which
+  checks them and streams the file through the app, with ranges and
+  `304`s, the bucket's address never shown;
+* **a CDN in front**: each file stored with a year's `Cache-Control`,
+  however it came in, and forgotten by the CDN when it is deleted, its
+  variants with it, by URL, tag or prefix (`Storehouse.Purge`, Cloudflare
+  built in);
 * **serving that is safe**: `Storehouse.Local.Plug` sends the checked
   type, `nosniff`, a sandboxing CSP, downloads for every type a browser
   should not show, and byte ranges, for video;
@@ -87,17 +105,47 @@ It gives your app:
 * **the same file again** is the one you have: found by its checksum
   before it is uploaded (and the upload signed with it, so the store
   takes only those bytes), or when it is verified, for two at once;
+* **files that expire**: an export, a report, a PDF to download for a
+  week, deleted after its time by a bucket's lifecycle rule or the
+  sweeper, its signed links never outliving it;
 * **cleanup**: files listed and deleted by prefix (an account's, a
   thousand at a time on S3), deletions tried again until the store
-  answers, and temporary files of forms never saved swept, by
-  `Storehouse.Cleaner`, a process of your app's, with no cron;
+  answers, and temporary files of forms never saved swept
+  (`Storehouse.Sweeper`), with no cron;
+* **work out of the request**, on a runner you choose: Oban's when your
+  app runs Oban, kept through deploys; a process of your app's without
+  it; or one of your own (another job system, a workflow engine), for
+  analysis, deletions and mirrors alike;
 * **files read back**: a file's size and type without reading it, its
   bytes all at once, as a stream a chunk at a time, or to a path, each
   refused past a size limit before a byte is read;
+* **archives of stored files**, an account's export: zips (compressed
+  where it helps, encrypted with AES-256, past 4 GB) or tars, made as a
+  stream into the store or a response, out of the request on your runner,
+  split in parts of a size, with nothing on the disk, their size known
+  before they are made;
 * **work after the upload**: steps of your own (an image's EXIF, a PDF's
-  pages) run on a stored file, at once or out of the request, in a
-  process of your app's or in Oban, their results kept in its metadata
-  and saved in its record's column;
+  pages) run on a stored file, at once or out of the request, their
+  results kept with it and saved in its record's column; and run again
+  over a whole table's files, a batch at a time, only where they are
+  missing (`mix storehouse.reprocess`);
+* **variants**: a photograph's thumbnail and its sizes for a `srcset`, in
+  WebP for the browsers that take it, by presets only, at URLs that never
+  change for a CDN to keep: made in the app with libvips, once however
+  many ask at the same time across a cluster, and deleted with their
+  original; or signed URLs of imgproxy, or of a renderer of your own;
+* **responsive images**: a photograph's `src`, `srcset`, size and
+  placeholder as data for a JSON API or an `<img>` for HEEx, never a size
+  larger than the original, and its sizes made before the first visitor
+  asks, on a queue of their own;
+* **a placeholder while a photograph loads**, as you prefer: a tiny WebP
+  of it, a few hundred bytes as a data URI that needs no script, a
+  ThumbHash or a BlurHash, and its average colour, made with libvips as it
+  loads, never decoding a large original whole, with none of its metadata;
+* **a photo's metadata edited without re-encoding it**, when you ask:
+  where it was taken removed, only a few tags kept, an author's name
+  written in, in a JPEG's, PNG's or WebP's own segments and chunks, its
+  image data untouched;
 * **what happens to files, as it happens**: a file stored, its analysis
   done or failed, a file deleted, told to a function of yours or
   broadcast on your app's PubSub, on a topic you choose (an account's);
@@ -213,8 +261,8 @@ user
 The guides: [Stores](guides/stores.md) (the local disk, S3, LocalStack,
 development), [Direct uploads](guides/direct_uploads.md) (and streamed
 ones), [Ecto](guides/ecto.md), [Private files](guides/private_files.md),
-[Serving](guides/serving.md), [LiveView](guides/liveview.md) and
-[After the upload](guides/analysis.md) and
+[Serving](guides/serving.md), [LiveView](guides/liveview.md),
+[After the upload](guides/analysis.md), [Variants](guides/variants.md) and
 [Uploads from any client](guides/any_client.md).
 
 ## How Storehouse compares
@@ -228,6 +276,8 @@ another library is welcome as an issue.
 |---|---|---|---|---|---|
 | A file's type from its bytes, a safe key | Yes | From its extension | No | Partly | Partly |
 | Serving with safe headers (`nosniff`, a sandboxing CSP, ranges) | Yes | — | — | — | — |
+| A CDN in front: cache headers on stored files, purged when deleted | Yes: per store or file, purged by URL, tag or prefix (Cloudflare built in) | No | No | Partly (a proxy mode) | No |
+| Private files streamed through the app | Yes, with ranges and `304`s | No | No | Yes | No |
 | Uploads straight to the store | Yes, checked by their first bytes | No | No | Yes | Presigned only |
 | Uploads streamed through the app, no temporary file | Yes | No | No | No | No |
 | Temporary until saved, then permanent | Yes | No | By hand | Partly | No |
@@ -236,30 +286,24 @@ another library is welcome as an issue.
 | LiveView uploads | Yes | No | No | Partly | No |
 | Reading a file back | Yes | Yes | Yes | Yes | Yes |
 | A file's own metadata | Yes, kept apart from the analysis's | No | Yes | Yes | Yes, shared with the analysis's |
-| Several stores at once | Yes: named stores, a store per field | Per uploader | Per file | Yes | One at a time |
-| Work after the upload, analysis | Yes: steps of your own, in a process of your app's or in Oban | No | No | Yes | Yes, on Oban |
-| Variants | Not yet ([#6](https://github.com/hattoriai/storehouse/issues/6)) | Made at upload | No | Yes | On demand |
-| Placeholders while an image loads | Not yet ([#4](https://github.com/hattoriai/storehouse/issues/4)) | No | No | Yes | No |
-| A table of files | Not yet ([#16](https://github.com/hattoriai/storehouse/issues/16)) | No | No | Yes | Yes |
+| A photo's location removed, its credit written, without re-encoding | Yes, a step you add: JPEG, PNG and WebP built in, an editor of yours (ExifTool) for other types | Only by re-encoding, with ImageMagick | No | Only by re-encoding | Only by re-encoding |
+| Several stores at once | Yes: named stores, a store per field, files copied and mirrored between them | Per uploader | Per file | Yes | One at a time |
+| Work after the upload, analysis | Yes: steps of your own, on a runner you choose (Oban's by default), run again over a table's files | No | No | Yes | Yes, on Oban |
+| Variants | Yes: presets only, made once across a cluster with libvips, or URLs signed for imgproxy behind a CDN, or a renderer of your own | Made at upload | No | Yes | On demand |
+| Placeholders while an image loads | Yes: a step you add, with Vix: a tiny WebP, a ThumbHash or a BlurHash, and the average colour | No | No | Yes | No |
+| A table of files | Yes, optional: a library of files many records use, the same file one row, deletion refused while in use | No | No | Yes | Yes |
 | The same file uploaded again is the one kept | Yes: before the upload, and when it is verified | No | No | No | No |
 | Endpoints and a client for frontends without LiveView | Yes: endpoints in batches, and a JavaScript client | No | No | Presign and complete | No |
-| Resumable and multipart uploads from the browser | Not yet ([#12](https://github.com/hattoriai/storehouse/issues/12)) | No | No | No | No |
+| Resumable and multipart uploads from the browser | Yes: multipart straight to the bucket, resumed after a reload, and tus through the app | No | No | No | No |
 | A store in memory, for async tests | Yes, with assertions | No | Yes | Yes | No |
-| Dependencies | None | Req, ImageMagick | None | Several | Oban, Vix |
+| Dependencies | None (Vix for placeholders and variants) | Req, ImageMagick | None | Several | Oban, Vix |
 
 ## Roadmap
 
-* **Variants**: images resized and converted on demand, and cached, each
-  made once however many ask for it at the same time, across a cluster.
 * **Previews and analysis**: a PDF's first page, a video's poster, its
   length and size, audio; metadata of the app's own, read again later.
 * **Cleanup of unused files**: the files no record uses any more, found
   by comparing the app's records with the store.
-* **Resumable uploads** that survive a reconnect (and the tus protocol),
-  and multipart uploads straight from the browser, for very large files.
-* **Mirror**: writing to two stores at once, for migrating between them.
-* **Proxy mode**: streaming private bucket files through the app, for a
-  CDN in front.
 * **Azure and native Google Cloud Storage**: Google Cloud Storage works
   through its S3-compatible API today.
 

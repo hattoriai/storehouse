@@ -206,9 +206,8 @@ if Code.ensure_loaded?(Ecto.Changeset) do
       do: Enum.flat_map(file_fields(record), &List.wrap(Map.get(record, &1)))
 
     @doc """
-    Deletes files from the store (`Storehouse.delete_later/2`): queued in
-    `Storehouse.Cleaner`, and tried again when the store fails, when the app
-    runs it; at once otherwise.
+    Deletes files from the store (`Storehouse.delete_later/2`): jobs of the
+    app's runner (`Storehouse.Runner`), tried again when the store fails.
     """
     @spec delete_files([Storehouse.File.t()], keyword()) :: :ok
     def delete_files(files, opts \\ []) do
@@ -313,7 +312,7 @@ if Code.ensure_loaded?(Ecto.Changeset) do
     with `analyze: [avatar: steps]`.
 
     Takes the options of `Storehouse.analyze_later/3` but `:then`
-    (`:runner`, `:oban`, `:force`, `:max_bytes`, `:adapter`).
+    (`:runner`, `:force`, `:max_bytes`, `:adapter`).
     """
     @spec analyze_later(module(), struct(), atom(), [Storehouse.Analyzer.step()], keyword()) ::
             :ok
@@ -328,7 +327,7 @@ if Code.ensure_loaded?(Ecto.Changeset) do
 
       later =
         opts
-        |> Keyword.take([:runner, :oban, :force, :max_bytes])
+        |> Keyword.take([:runner, :force, :max_bytes])
         |> Keyword.merge(store_opts(record, field, opts))
 
       for file <- files,
@@ -338,6 +337,146 @@ if Code.ensure_loaded?(Ecto.Changeset) do
               steps,
               Keyword.put(later, :then, {__MODULE__, :save_analyzed, [repo, schema, id, field]})
             )
+    end
+
+    @doc """
+    Runs analysis steps over the files of `field` in every record
+    `queryable` gives: a step added after files were stored (placeholders
+    a year in), a step that failed, files from before analysis existed.
+
+        Storehouse.Ecto.reprocess(Repo, MyApp.Photo, :image, [MyApp.Analyzers.Placeholder])
+        #=> {:ok, %{records: 10_000, files: 9_412, skipped: 588, failed: []}}
+
+    The records are read a batch at a time, in the order of their primary
+    key, so a table of any size takes the memory of a batch. A file that
+    has every step's result already is skipped, so it can be stopped and
+    run again: it does only what is missing. `:after` starts after the
+    primary key a run got to (`:on_progress` gives it).
+
+    Each file is a job of the app's runner (`Storehouse.Runner`), which
+    saves its results in the record's column as `analyze_later/5` does;
+    with `now: true`, the steps run here instead, several files at once,
+    and the results are saved before it returns. `mix storehouse.reprocess`
+    runs it from the command line.
+
+    ## Options
+
+      * `:batch_size` - the records read at a time. The default is 500.
+      * `:force` - every file, its steps run again. The default is
+        `false`: only the files a step has yet to run on, or failed on.
+      * `:now` - run the steps here, not as jobs. The default is `false`.
+      * `:max_concurrency` - with `now: true`, how many files at once. The
+        default is 4.
+      * `:after` - the primary key to start after.
+      * `:on_progress` - a function given, after each batch, the counts so
+        far and `:last`, the batch's last primary key.
+      * `:runner`, `:max_bytes` and `:adapter` - as for `analyze_later/5`.
+
+    Gives the counts: the `:records` read, the `:files` analyzed (or given
+    to the runner), those `:skipped`, done already, and those `:failed`,
+    `{primary_key, file_key, reason}`. A span, `[:storehouse, :reprocess]`.
+    """
+    @spec reprocess(module(), Ecto.Queryable.t(), atom(), [Storehouse.Analyzer.step()], keyword()) ::
+            {:ok, map()}
+    def reprocess(repo, queryable, field, steps, opts \\ []) do
+      query = Ecto.Queryable.to_query(queryable)
+      {_source, schema} = query.from.source
+      [primary] = schema.__schema__(:primary_key)
+      batch = Keyword.get(opts, :batch_size, 500)
+      meta = %{schema: schema, field: field}
+
+      :telemetry.span([:storehouse, :reprocess], meta, fn ->
+        summary =
+          opts[:after]
+          |> Stream.unfold(&page(repo, query, primary, field, &1, batch))
+          |> Enum.reduce(%{records: 0, files: 0, skipped: 0, failed: []}, fn records, summary ->
+            repo
+            |> reprocessed(records, field, steps, opts, summary)
+            |> progress(records, primary, opts)
+          end)
+
+        summary = %{summary | failed: Enum.reverse(summary.failed)}
+        {{:ok, summary}, Map.put(meta, :summary, summary)}
+      end)
+    end
+
+    # The counts so far, given to `:on_progress` with the batch's last key.
+    defp progress(summary, records, primary, opts) do
+      if fun = opts[:on_progress],
+        do: fun.(Map.put(summary, :last, records |> List.last() |> Map.fetch!(primary)))
+
+      summary
+    end
+
+    # A batch of records after `last`, in the order of their primary key.
+    defp page(repo, query, primary, field, last, batch) do
+      page =
+        Ecto.Query.from(r in query,
+          where: not is_nil(field(r, ^field)),
+          order_by: [asc: field(r, ^primary)],
+          limit: ^batch
+        )
+
+      page =
+        if is_nil(last), do: page, else: Ecto.Query.where(page, [r], field(r, ^primary) > ^last)
+
+      case repo.all(page) do
+        [] -> nil
+        records -> {records, Map.fetch!(List.last(records), primary)}
+      end
+    end
+
+    defp reprocessed(repo, records, field, steps, opts, summary) do
+      files = for record <- records, file <- List.wrap(Map.get(record, field)), do: {record, file}
+
+      todo =
+        Enum.filter(files, fn {_record, file} ->
+          opts[:force] || Storehouse.Analyzer.pending?(file, steps)
+        end)
+
+      failed =
+        for {{record, file}, {:error, reason}} <-
+              Enum.zip(todo, analyzed(repo, todo, field, steps, opts)),
+            do: {primary_key(record), file.key, reason}
+
+      %{
+        summary
+        | records: summary.records + length(records),
+          files: summary.files + length(todo),
+          skipped: summary.skipped + length(files) - length(todo),
+          failed: Enum.reverse(failed, summary.failed)
+      }
+    end
+
+    defp primary_key(%schema{} = record) do
+      [primary] = schema.__schema__(:primary_key)
+      Map.fetch!(record, primary)
+    end
+
+    # Each file's result, in order: given to the runner, or, now, its
+    # steps run and saved here.
+    defp analyzed(repo, files, field, steps, opts) do
+      if opts[:now] do
+        files
+        |> Task.async_stream(&analyze_now(repo, &1, field, steps, opts),
+          max_concurrency: Keyword.get(opts, :max_concurrency, 4),
+          timeout: :infinity
+        )
+        |> Enum.map(fn {:ok, result} -> result end)
+      else
+        for {record, file} <- files,
+            do: hd(analyze_files(repo, record, field, [file], steps, opts))
+      end
+    end
+
+    defp analyze_now(repo, {%schema{} = record, file}, field, steps, opts) do
+      analyze_opts =
+        opts
+        |> Keyword.take([:force, :max_bytes])
+        |> Keyword.merge(store_opts(record, field, opts))
+
+      with {:ok, analyzed} <- Storehouse.analyze(file, steps, analyze_opts),
+           do: save_analyzed(analyzed, repo, schema, primary_key(record), field)
     end
 
     @doc false

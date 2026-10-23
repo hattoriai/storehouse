@@ -38,6 +38,21 @@ defmodule Storehouse.Local.PlugTest do
     assert get_resp_header(conn, "content-disposition") == ["inline"]
   end
 
+  test "a Cache-Control of its own, and the file's cache tag, for a CDN", %{root: root} do
+    opts =
+      FilePlug.init(
+        at: "/files",
+        root: root,
+        cache_control: "public, max-age=31536000, immutable",
+        cache_tag: true
+      )
+
+    conn = call("/files/2026/09/cat.png", opts)
+
+    assert get_resp_header(conn, "cache-control") == ["public, max-age=31536000, immutable"]
+    assert get_resp_header(conn, "cache-tag") == [Storehouse.Purge.cache_tag("2026/09/cat.png")]
+  end
+
   test "sends an active type as application/octet-stream, as a download", %{opts: opts} do
     for name <- ["page.html", "logo.svg", "run.js"] do
       conn = call("/files/2026/09/#{name}", opts)

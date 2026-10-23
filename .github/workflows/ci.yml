@@ -46,6 +46,12 @@ jobs:
           for i in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:4566/ && exit 0; sleep 1; done
           cat /tmp/moto.log; exit 1
 
+      # 7-Zip, to open the AES-encrypted zips of Storehouse.Archive's tests.
+      - run: sudo apt-get install -y --no-install-recommends p7zip-full
+
+      # tuspy, a tus client, for Storehouse.Tus.Plug's tests.
+      - run: python3 -m venv /tmp/tuspy && /tmp/tuspy/bin/pip install --quiet tuspy
+
       - run: mix deps.get
       - run: mix compile --warnings-as-errors
       - run: mix format --check-formatted
@@ -56,6 +62,7 @@ jobs:
         env:
           S3_ENDPOINT: http://127.0.0.1:4566
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/storehouse_test
+          STOREHOUSE_PYTHON: /tmp/tuspy/bin/python
 
   # The oldest Elixir Storehouse takes (mix.exs), where JSON is Jason's.
   test-oldest:

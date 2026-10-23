@@ -66,11 +66,7 @@ defmodule Storehouse do
 
   require Logger
 
-  alias Storehouse.Check
-  alias Storehouse.Oban.Analyze, as: AnalyzeJob
-
-  # Oban is optional: these are called only with runner: :oban.
-  @compile {:no_warn_undefined, [Oban, AnalyzeJob]}
+  alias Storehouse.{Check, Jobs}
 
   @max_name 100
   @max_display_name 200
@@ -130,6 +126,13 @@ defmodule Storehouse do
     * `:cache` - `true` stores the file under the temporary prefix
       (`cache_prefix/0`), until `promote/2` makes it permanent: an upload
       of a form that may never be saved.
+    * `:expires_in` - seconds after which the file is deleted: an export,
+      a report, a PDF to download for a week. Its key is an expiring one
+      (`expiring_key/2`): a bucket's lifecycle rule deletes it, or
+      `Storehouse.Sweeper` does, and `signed_url/2` never signs it past
+      then. Not with `:cache`.
+    * `:cache_control` - the `Cache-Control` the store serves the file
+      with, in place of its own (`Storehouse.S3`'s `:cache_control`).
     * `:preview` - a function of the stored file and `path` that gives
       the URL of a smaller image of it (a thumbnail, a PDF's first page, a
       video's poster), or `nil`. It runs while `path` is still there; the
@@ -162,12 +165,16 @@ defmodule Storehouse do
          checksum = checksum(path),
          :new <- known(opts, checksum),
          {:ok, key} <- new_key(opts, name, description.content_type),
-         meta = %{
-           name: name,
-           content_type: description.content_type,
-           bytes: description.bytes,
-           checksum: checksum
-         },
+         meta =
+           cache_control(
+             %{
+               name: name,
+               content_type: description.content_type,
+               bytes: description.bytes,
+               checksum: checksum
+             },
+             opts
+           ),
          {:ok, url} <- put(adapter, key, path, meta) do
       file = %Storehouse.File{
         key: key,
@@ -182,6 +189,14 @@ defmodule Storehouse do
       }
 
       {:ok, preview(file, path, Keyword.get(opts, :preview))}
+    end
+  end
+
+  # The `Cache-Control` the store keeps with the file, when one is asked.
+  defp cache_control(meta, opts) do
+    case opts[:cache_control] do
+      nil -> meta
+      value when is_binary(value) -> Map.put(meta, :cache_control, value)
     end
   end
 
@@ -211,14 +226,23 @@ defmodule Storehouse do
     do: if(type in accept, do: :ok, else: {:error, :not_accepted})
 
   @doc false
-  def new_key_for(opts, name, content_type), do: new_key(opts, name, content_type)
+  # For an upload straight to the store, whose `:expires_in` is its URL's.
+  def new_key_for(opts, name, content_type),
+    do: new_key(Keyword.delete(opts, :expires_in), name, content_type)
 
   # The key of a new file: the `:key` function's, or `key/2`'s; under the
   # temporary prefix with `cache: true`.
   defp new_key(opts, name, content_type) do
+    if opts[:cache] && opts[:expires_in],
+      do: raise(ArgumentError, "a file is temporary (:cache) or expiring (:expires_in), not both")
+
     with key when is_binary(key) <- Keyword.get(opts, :key, &key/2).(name, content_type),
          {:ok, key} <- under_owner(key, opts[:owner]) do
-      {:ok, if(opts[:cache], do: cache_prefix() <> key, else: key)}
+      cond do
+        opts[:cache] -> {:ok, cache_prefix() <> key}
+        expires_in = opts[:expires_in] -> {:ok, expiring_key(key, expires_in)}
+        true -> {:ok, key}
+      end
     else
       {:error, _reason} = error -> error
       other -> {:error, {:invalid_key, other}}
@@ -284,7 +308,10 @@ defmodule Storehouse do
   def owns?(owner, key) when is_binary(key) do
     with {:ok, prefix} <- owner_prefix(owner),
          true <- valid_key?(key) do
-      key |> String.replace_prefix(cache_prefix(), "") |> String.starts_with?(prefix <> "/")
+      key
+      |> String.replace_prefix(cache_prefix(), "")
+      |> unexpiring()
+      |> String.starts_with?(prefix <> "/")
     else
       _not -> false
     end
@@ -369,6 +396,74 @@ defmodule Storehouse do
   """
   @spec cache_prefix() :: String.t()
   def cache_prefix, do: Application.get_env(:storehouse, :cache_prefix, "cache/")
+
+  @doc """
+  The prefix of the keys of expiring files (`:expires_in`): `"expiring/"`,
+  or `config :storehouse, expiring_prefix: "expires/"`.
+  """
+  @spec expiring_prefix() :: String.t()
+  def expiring_prefix, do: Application.get_env(:storehouse, :expiring_prefix, "expiring/")
+
+  @doc """
+  The key of a file that expires in `expires_in` seconds: under
+  `expiring_prefix/0`, then the days it is kept (rounded up, for a
+  bucket's lifecycle rule of that many days), then when it expires, in
+  Unix seconds, then `key`.
+
+      iex> Storehouse.expiring_key("exports/42.zip", 86_400, ~U[2026-10-23 12:00:00Z])
+      "expiring/1d/1792843200/exports/42.zip"
+
+  A bucket needs one lifecycle rule a day count it is given, on its
+  prefix: `"expiring/1d/"` expires after 1 day, `"expiring/7d/"` after 7.
+  See "Files that expire" in the Stores guide.
+  """
+  @spec expiring_key(Storehouse.Adapter.key(), pos_integer(), DateTime.t()) ::
+          Storehouse.Adapter.key()
+  def expiring_key(key, expires_in, now \\ DateTime.utc_now())
+      when is_binary(key) and is_integer(expires_in) and expires_in > 0 do
+    days = div(expires_in + 86_399, 86_400)
+    at = DateTime.to_unix(now) + expires_in
+    "#{expiring_prefix()}#{days}d/#{at}/" <> key
+  end
+
+  @doc """
+  When a file (or a key) expires (`expiring_key/2`), or `nil` for one that
+  does not.
+
+      iex> Storehouse.expires_at("expiring/1d/1792843200/exports/42.zip")
+      ~U[2026-10-24 12:00:00Z]
+
+      iex> Storehouse.expires_at("exports/42.zip")
+      nil
+
+  """
+  @spec expires_at(Storehouse.File.t() | Storehouse.Adapter.key()) :: DateTime.t() | nil
+  def expires_at(%Storehouse.File{key: key}), do: expires_at(key)
+
+  def expires_at(key) when is_binary(key) do
+    prefix = expiring_prefix()
+
+    with ^prefix <> rest <- key,
+         [days, at, _key] <- String.split(rest, "/", parts: 3),
+         {_days, "d"} <- Integer.parse(days),
+         {at, ""} <- Integer.parse(at) do
+      DateTime.from_unix!(at)
+    else
+      _not_expiring -> nil
+    end
+  end
+
+  # The key without its expiring prefix, days and time.
+  defp unexpiring(key) do
+    if expires_at(key) do
+      [_days, _at, rest] =
+        key |> String.replace_prefix(expiring_prefix(), "") |> String.split("/", parts: 3)
+
+      rest
+    else
+      key
+    end
+  end
 
   @doc "Whether a file (or a key) is a temporary one, under `cache_prefix/0`."
   @spec cached?(Storehouse.File.t() | Storehouse.Adapter.key()) :: boolean()
@@ -500,6 +595,8 @@ defmodule Storehouse do
       those bytes. An invalid one gives `{:error, :invalid_checksum}`.
     * `:existing` - as for `store/2`, with `:checksum`: a file the app
       has already gives `{:existing, file}`, and nothing is uploaded.
+    * `:cache_control` - as for `store/2`: signed, so the browser sends
+      it, and the store keeps it.
     * `:adapter` and `:key`, as for `store/2`. The adapter must sign
       uploads (`c:Storehouse.Adapter.presign_upload/3`): `Storehouse.Local`
       and `Storehouse.S3` do; another gives `{:error, :not_supported}`.
@@ -528,12 +625,246 @@ defmodule Storehouse do
              do: {:error, :too_large},
              else: :ok
            ),
-         {:ok, key} <- new_key(opts, name, type),
-         meta = %{name: name, content_type: type, bytes: bytes, checksum: checksum},
+         {:ok, key} <- new_key_for(opts, name, type),
+         meta =
+           cache_control(
+             %{name: name, content_type: type, bytes: bytes, checksum: checksum},
+             opts
+           ),
          {:ok, upload} <-
            adapter.presign_upload(key, meta, expires_in: Keyword.get(opts, :expires_in, 600)) do
       {:ok, Map.put(upload, :key, key)}
     end
+  end
+
+  @doc """
+  Starts an upload of a very large file that the browser sends straight to
+  the store in parts, a few at a time, each tried again on its own: a
+  video, an archive to import, past what one `PUT` sends well (and S3's
+  5 GB). Checked as `presign_upload/4` checks one (its type, size, the
+  owner's room, the same file again), and given the parts' size:
+
+      {:ok, %{key: key, upload_id: id, part_bytes: 16_777_216, parts: 128}} =
+        Storehouse.presign_multipart("film.mov", "video/quicktime", 2_147_483_648, owner: owner)
+
+  Then `presign_parts/4` signs the parts, `multipart_parts/3` says which
+  the store has (to go on after a reload), and `complete_multipart/4`
+  puts them together and checks the file as `verify_upload/2` does.
+  `abort_multipart/3` gives it up. `Storehouse.Plug.Multipart` is the
+  same as JSON endpoints, and the JavaScript client sends large files
+  through it.
+
+  ## Options
+
+  Those of `presign_upload/4`, and:
+
+    * `:part_bytes` - the size of each part but the last, at least 5 MiB.
+      The default is 16 MiB, or more for a file of more than 10,000 such
+      parts (S3's most).
+
+  The adapter must take multipart uploads (`c:Storehouse.Adapter.multipart_start/2`):
+  `Storehouse.S3` does; another gives `{:error, :not_supported}`.
+  """
+  @spec presign_multipart(String.t(), String.t() | nil, non_neg_integer(), keyword()) ::
+          {:ok,
+           %{
+             key: String.t(),
+             upload_id: String.t(),
+             part_bytes: pos_integer(),
+             parts: pos_integer()
+           }}
+          | {:existing, Storehouse.File.t()}
+          | {:error, term()}
+  def presign_multipart(name, claim, bytes, opts \\ []) when is_integer(bytes) and bytes >= 0 do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+    type = Check.claimed(claim)
+    name = clean_name(name)
+    meta = %{name: name, content_type: type, bytes: bytes, adapter: adapter}
+
+    span(:presign_multipart, meta, fn ->
+      with :ok <- supported(adapter, :multipart_start, 2),
+           :ok <- accepted(type, Keyword.get(opts, :accept)),
+           {:ok, checksum} <- claimed_checksum(opts[:checksum]),
+           :new <- known(opts, checksum),
+           :ok <- fits(bytes, opts[:room]),
+           :ok <- at_most(bytes, opts[:max_bytes]),
+           {:ok, part_bytes} <- part_bytes(bytes, opts[:part_bytes]),
+           {:ok, key} <- new_key_for(opts, name, type),
+           {:ok, upload_id} <-
+             adapter.multipart_start(
+               key,
+               cache_control(%{name: name, content_type: type, bytes: bytes}, opts)
+             ) do
+        {:ok,
+         %{
+           key: key,
+           upload_id: upload_id,
+           part_bytes: part_bytes,
+           parts: max(ceil_div(bytes, part_bytes), 1)
+         }}
+      end
+    end)
+  end
+
+  @min_part 5 * 1_048_576
+  @max_parts 10_000
+
+  defp at_most(bytes, max) when is_integer(max) and bytes > max, do: {:error, :too_large}
+  defp at_most(_bytes, _max), do: :ok
+
+  # The parts' size: the one asked, at least S3's 5 MiB, and large enough
+  # that the file is no more than 10,000 parts.
+  defp part_bytes(bytes, asked) do
+    size = max(max(asked || 16 * 1_048_576, @min_part), ceil_div(bytes, @max_parts))
+    if bytes > 5 * 1_099_511_627_776, do: {:error, :too_large}, else: {:ok, size}
+  end
+
+  defp ceil_div(a, b), do: div(a + b - 1, b)
+
+  @doc """
+  Signs the browser's `PUT`s of parts of an upload (`presign_multipart/4`):
+  each a part number, or `{number, checksum}` with the part's SHA-256 in
+  Base64, which the store then checks. Gives `{:ok, [%{number: n, method:
+  "PUT", url: …, headers: %{…}}]}`, at most 1,000 at a time; a number
+  outside 1 to 10,000 gives `{:error, :invalid_part}`.
+
+  ## Options
+
+    * `:expires_in` - how long each URL is valid, in seconds. The default
+      is an hour.
+    * `:adapter` - as for `presign_multipart/4`.
+  """
+  @spec presign_parts(
+          String.t(),
+          String.t(),
+          [pos_integer() | {pos_integer(), String.t()}],
+          keyword()
+        ) ::
+          {:ok, [map()]} | {:error, term()}
+  def presign_parts(key, upload_id, parts, opts \\ []) when is_list(parts) do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+
+    with :ok <- supported(adapter, :multipart_sign, 4),
+         true <- valid_key?(key) || {:error, :invalid_key},
+         true <- length(parts) in 1..1_000 || {:error, :invalid_part},
+         {:ok, parts} <- valid_parts(parts) do
+      sign_each(adapter, key, upload_id, parts, Keyword.get(opts, :expires_in, 3_600))
+    end
+  end
+
+  defp sign_each(adapter, key, upload_id, parts, expires_in) do
+    parts
+    |> Enum.reduce_while({:ok, []}, fn {number, checksum}, {:ok, signed} ->
+      case adapter.multipart_sign(key, upload_id, number,
+             checksum: checksum,
+             expires_in: expires_in
+           ) do
+        {:ok, url} -> {:cont, {:ok, [Map.put(url, :number, number) | signed]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> then(fn
+      {:ok, signed} -> {:ok, Enum.reverse(signed)}
+      error -> error
+    end)
+  end
+
+  defp valid_parts(parts) do
+    parts = Enum.map(parts, &valid_part/1)
+    if Enum.all?(parts), do: {:ok, parts}, else: {:error, :invalid_part}
+  end
+
+  # A part number, and its checksum or nil: a SHA-256 in Base64 is 44 long.
+  defp valid_part(n) when is_integer(n), do: valid_part({n, nil})
+  defp valid_part({n, nil}) when is_integer(n) and n in 1..@max_parts, do: {n, nil}
+
+  defp valid_part({n, sum})
+       when is_integer(n) and n in 1..@max_parts and is_binary(sum) and byte_size(sum) == 44,
+       do: {n, sum}
+
+  defp valid_part(_part), do: nil
+
+  @doc """
+  The parts the store has of an upload (`presign_multipart/4`), by number,
+  with their `:bytes` and `:checksum`: what a browser that was reloaded
+  need not send again.
+  """
+  @spec multipart_parts(String.t(), String.t(), keyword()) ::
+          {:ok, [%{number: pos_integer(), bytes: non_neg_integer(), checksum: String.t() | nil}]}
+          | {:error, term()}
+  def multipart_parts(key, upload_id, opts \\ []) do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+
+    with :ok <- supported(adapter, :multipart_parts, 2),
+         true <- valid_key?(key) || {:error, :invalid_key},
+         {:ok, parts} <- adapter.multipart_parts(key, upload_id) do
+      {:ok,
+       parts |> Enum.sort_by(& &1.number) |> Enum.map(&Map.take(&1, [:number, :bytes, :checksum]))}
+    end
+  end
+
+  @doc """
+  Puts an upload's parts together (`presign_multipart/4`), then checks the
+  file as `verify_upload/2` does (its type by its first bytes, its size,
+  the owner's room, the same file again) and gives it: `{:ok, file}`,
+  `{:existing, file}`, or an error, the file deleted.
+
+  The parts are the store's, never the browser's word: every part from 1
+  up, and together exactly `bytes`, or it gives `{:error, {:missing_parts,
+  numbers}}` or `{:error, {:wrong_size, bytes_the_store_has}}`, and the
+  upload stays, for the browser to send what is missing.
+
+  Takes the options of `verify_upload/2`.
+  """
+  @spec complete_multipart(String.t(), String.t(), non_neg_integer(), keyword()) ::
+          {:ok, Storehouse.File.t()} | {:existing, Storehouse.File.t()} | {:error, term()}
+  def complete_multipart(key, upload_id, bytes, opts \\ []) when is_integer(bytes) do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+
+    span(:complete_multipart, %{key: key, adapter: adapter}, fn ->
+      with :ok <- supported(adapter, :multipart_complete, 3),
+           true <- valid_key?(key) || {:error, :invalid_key},
+           {:ok, parts} <- adapter.multipart_parts(key, upload_id),
+           parts = Enum.sort_by(parts, & &1.number),
+           :ok <- whole(parts, bytes),
+           :ok <- adapter.multipart_complete(key, upload_id, parts) do
+        verify_upload(key, opts)
+      end
+    end)
+  end
+
+  # Every part from 1 up to the last one `bytes` takes in parts of the first
+  # one's size, and their sizes `bytes` together.
+  defp whole(parts, bytes) do
+    numbers = Enum.map(parts, & &1.number)
+
+    expected =
+      case parts do
+        [%{number: 1, bytes: size} | _rest] when size > 0 ->
+          Enum.to_list(1..max(ceil_div(bytes, size), 1))
+
+        _other ->
+          Enum.to_list(1..max(Enum.max(numbers, fn -> 1 end), 1))
+      end
+
+    case expected -- numbers do
+      [] ->
+        total = parts |> Enum.map(& &1.bytes) |> Enum.sum()
+        if total == bytes, do: :ok, else: {:error, {:wrong_size, total}}
+
+      missing ->
+        {:error, {:missing_parts, missing}}
+    end
+  end
+
+  @doc "Gives up an upload (`presign_multipart/4`): its parts are deleted from the store."
+  @spec abort_multipart(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def abort_multipart(key, upload_id, opts \\ []) do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+
+    with :ok <- supported(adapter, :multipart_abort, 2),
+         true <- valid_key?(key) || {:error, :invalid_key},
+         do: adapter.multipart_abort(key, upload_id)
   end
 
   @doc """
@@ -570,6 +901,7 @@ defmodule Storehouse do
            span(:verify_upload, %{key: key, adapter: adapter}, fn ->
              do_verify_upload(key, adapter, opts)
            end) do
+      if supported(adapter, :uploaded, 1) == :ok, do: adapter.uploaded(key)
       Storehouse.Notify.notify(:stored, %{file: file}, opts)
       {:ok, file}
     end
@@ -659,7 +991,9 @@ defmodule Storehouse do
 
   ## Options
 
-    * `:expires_in` - in seconds. The default is 300.
+    * `:expires_in` - in seconds. The default is 300. An expiring file's
+      URL (`expiring_key/2`) expires with it, at the latest; one expired
+      already gives `{:error, :expired}`.
     * `:disposition` - `"inline"` or `"attachment"` (a download).
     * `:filename` - the name of the download.
     * `:adapter` - as for `store/2`. The adapter must sign URLs
@@ -675,14 +1009,27 @@ defmodule Storehouse do
     adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
 
     with :ok <- supported(adapter, :signed_url, 2),
-         true <- valid_key?(key) || {:error, :invalid_key} do
+         true <- valid_key?(key) || {:error, :invalid_key},
+         {:ok, expires_in} <- signed_for(key, Keyword.get(opts, :expires_in, 300)) do
       adapter.signed_url(
         key,
         Keyword.merge(
-          [expires_in: 300],
-          Keyword.take(opts, [:expires_in, :disposition, :filename])
+          Keyword.take(opts, [:disposition, :filename]),
+          expires_in: expires_in
         )
       )
+    end
+  end
+
+  # An expiring file's URL never outlives it.
+  defp signed_for(key, expires_in) do
+    case expires_at(key) do
+      nil ->
+        {:ok, expires_in}
+
+      at ->
+        left = DateTime.diff(at, DateTime.utc_now())
+        if left > 0, do: {:ok, min(expires_in, left)}, else: {:error, :expired}
     end
   end
 
@@ -873,18 +1220,15 @@ defmodule Storehouse do
       )
 
   `:then` is `{module, function, args}`, called with the file first, then
-  `args`. A file that cannot be read for the steps gives it nothing: with
-  Oban, the job is tried again.
+  `args`. The work is a job of the app's runner (`Storehouse.Runner`):
+  Oban's when the app runs Oban, else a process of the app's. A file that
+  cannot be read for the steps gives the function nothing, and the job is
+  tried again.
 
   ## Options
 
     * `:then` - the function (required).
-    * `:runner` - `:task` (the default) runs them in `Storehouse.Tasks`, a
-      supervisor of the app's, or at once without it; `:oban` in an Oban
-      job (`Storehouse.Oban.Analyze`), which outlives a deploy.
-    * `:oban` - for `runner: :oban`, the job's options (`:queue`,
-      `:max_attempts`, …) and `:name`, the Oban instance (the default is
-      `Oban`).
+    * `:runner` - the runner, in place of the app's (`Storehouse.Runner`).
     * `:force`, `:max_bytes` and `:adapter` - as for `analyze/3`.
   """
   @spec analyze_later(Storehouse.File.t(), [Storehouse.Analyzer.step()], keyword()) ::
@@ -897,24 +1241,9 @@ defmodule Storehouse do
     later =
       opts |> Keyword.take([:then, :force, :max_bytes, :notify]) |> Keyword.put(:adapter, adapter)
 
-    case Keyword.get(opts, :runner, :task) do
-      :task -> Storehouse.Tasks.run(fn -> analyze_now(file, steps, later) end)
-      :oban -> analyze_in_oban(file, steps, later, Keyword.get(opts, :oban, []))
-    end
-  end
-
-  defp analyze_in_oban(file, steps, later, oban) do
-    {name, job} = Keyword.pop(oban, :name, Oban)
-    term = Base.encode64(:erlang.term_to_binary({file, steps, later}))
-    names = Enum.map(steps, &Storehouse.Analyzer.name/1)
-
-    case Oban.insert(
-           name,
-           AnalyzeJob.new(%{key: file.key, steps: names, term: term}, job)
-         ) do
-      {:ok, _job} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
+    file
+    |> Jobs.Analyze.job(steps, later)
+    |> Storehouse.Runner.enqueue(opts)
   end
 
   @doc false
@@ -1118,12 +1447,18 @@ defmodule Storehouse do
     end
   end
 
-  @doc "Deletes the file with `key`, through the adapter (`:adapter`, or `adapter/0`)."
+  @doc """
+  Deletes the file with `key`, through the adapter (`:adapter`, or
+  `adapter/0`), and its stored variants (`Storehouse.Variants`), where the
+  store lists files.
+  """
   @spec delete(Storehouse.Adapter.key(), keyword()) :: :ok | {:error, term()}
   def delete(key, opts \\ []) do
     adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
 
     with :ok <- span(:delete, %{key: key, adapter: adapter}, fn -> adapter.delete(key) end) do
+      Storehouse.Variants.delete(key, adapter: adapter)
+      Storehouse.Purge.deleted(key, Keyword.put(opts, :adapter, adapter))
       Storehouse.Notify.notify(:deleted, %{key: key}, opts)
     end
   end
@@ -1157,6 +1492,65 @@ defmodule Storehouse do
   end
 
   @doc """
+  Copies the file with `key` from one store to another, under the same
+  key: to move to another provider, keep a second copy, or bring a
+  production account's files into development.
+
+      Storehouse.copy("2026/10/0b6…-board.png", from: MyApp.OldMedia, to: MyApp.Media)
+      #=> {:ok, :copied}
+
+  A file the destination has already, the same size and, where both
+  stores keep one, the same checksum, is not copied again: `{:ok,
+  :skipped}`. Its type stays as it was.
+
+  Two buckets the same credentials reach (`Storehouse.S3`), or two folders
+  of this disk (`Storehouse.Local`), copy it themselves, with no byte
+  through the app. Otherwise it is read a chunk at a time (`stream/2`)
+  into the destination (`c:Storehouse.Adapter.stream_open/2`, else a
+  temporary file and `c:Storehouse.Adapter.put/3`), and its checksum,
+  computed on the way, must be the source's, else nothing is kept and
+  the copy gives `{:error, :checksum_mismatch}`.
+
+  ## Options
+
+    * `:from` and `:to` - the stores, two of them. Both must read files
+      back (`head/2`).
+    * `:verify` - when either store keeps no checksum of the whole file
+      (the local disk; S3, of a file sent in parts), read both to compare
+      a file of the same size before it is skipped. The default is `false`:
+      the same size is the same file.
+  """
+  @spec copy(Storehouse.Adapter.key(), keyword()) ::
+          {:ok, :copied | :skipped} | {:error, term()}
+  def copy(key, opts) when is_binary(key), do: Storehouse.Copy.copy(key, opts)
+
+  @doc """
+  Copies every file whose key starts with `prefix` (see `list/2`) from one
+  store to another (`copy/2`), several at once. Files the destination has
+  already are skipped, so it can be run again: after an error, or to
+  catch up with what was written since.
+
+      Storehouse.copy_prefix("accounts/42/", from: MyApp.Media, to: MyApp.DevMedia)
+      #=> {:ok, %{copied: 1_204, skipped: 0, failed: []}}
+
+  `""` copies every file. `mix storehouse.copy` runs it from the command
+  line, with its progress.
+
+  ## Options
+
+    * `:from`, `:to` and `:verify` - as for `copy/2`.
+    * `:max_concurrency` - how many files are copied at once. The default
+      is 4.
+    * `:on_progress` - a function of each file's key and result
+      (`{:ok, :copied}`, …), as each is done.
+  """
+  @spec copy_prefix(String.t(), keyword()) ::
+          {:ok, %{copied: non_neg_integer(), skipped: non_neg_integer(), failed: list()}}
+          | {:error, term()}
+  def copy_prefix(prefix, opts) when is_binary(prefix),
+    do: Storehouse.Copy.copy_prefix(prefix, opts)
+
+  @doc """
   Deletes every file whose key starts with `prefix` (see `list/2`): an
   account's files when it goes, every version of a file. A thousand keys
   at a time where the store deletes many at once
@@ -1182,6 +1576,9 @@ defmodule Storehouse do
       end)
 
     with {:ok, count} <- result do
+      Storehouse.Variants.delete(prefix, adapter: adapter)
+      Storehouse.Purge.deleted_prefix(prefix, Keyword.put(opts, :adapter, adapter))
+
       Storehouse.Notify.notify(:deleted, %{prefix: prefix, count: count}, opts)
       {:ok, count}
     end
@@ -1217,19 +1614,24 @@ defmodule Storehouse do
 
   @doc """
   Deletes the file with `key` later, and again until the store answers:
-  a file replaced or removed, whose record is already saved. With
-  `Storehouse.Cleaner` in the app's supervision tree, the deletion is
-  queued there and retried when the store fails; without it, the file is
-  deleted at once, as `delete/2` does.
+  a file replaced or removed, whose record is already saved. The deletion
+  is a job of the app's runner (`Storehouse.Runner`), tried again when the
+  store fails.
 
-  Gives `:ok`, or `{:error, :invalid_key}` for a key `valid_key?/1`
-  refuses. Takes `:adapter`, as `delete/2` does.
+  Gives `:ok` once the job is kept, or `{:error, :invalid_key}` for a key
+  `valid_key?/1` refuses. Takes `:adapter`, as `delete/2` does, and
+  `:runner`.
   """
   @spec delete_later(Storehouse.Adapter.key(), keyword()) :: :ok | {:error, term()}
   def delete_later(key, opts \\ []) when is_binary(key) do
     if valid_key?(key),
-      do: Storehouse.Cleaner.queue({:key, key}, opts),
+      do: later_delete(%{"key" => key}, opts),
       else: {:error, :invalid_key}
+  end
+
+  defp later_delete(target, opts) do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+    target |> Jobs.Delete.job(adapter) |> Storehouse.Runner.enqueue(opts)
   end
 
   @doc """
@@ -1240,7 +1642,7 @@ defmodule Storehouse do
   @spec delete_prefix_later(String.t(), keyword()) :: :ok | {:error, term()}
   def delete_prefix_later(prefix, opts \\ []) when is_binary(prefix) do
     if valid_prefix?(prefix),
-      do: Storehouse.Cleaner.queue({:prefix, prefix}, opts),
+      do: later_delete(%{"prefix" => prefix}, opts),
       else: {:error, :invalid_prefix}
   end
 
@@ -1285,6 +1687,21 @@ defmodule Storehouse do
   defp outcome({:ok, _other}), do: %{result: :ok}
   defp outcome(:ok), do: %{result: :ok}
   defp outcome({:error, reason}), do: %{result: :error, reason: reason}
+
+  @doc """
+  The URL of `file`'s variant of a preset: a thumbnail, one size of a
+  `srcset`. See `Storehouse.Variants.url/3`.
+  """
+  @spec variant_url(Storehouse.File.t() | String.t(), atom(), keyword()) :: String.t()
+  def variant_url(file, preset, opts \\ []), do: Storehouse.Variants.url(file, preset, opts)
+
+  @doc """
+  `file`'s variant of a preset, found or made once, however many ask for
+  it: `{:ok, %Storehouse.File{}}`. See `Storehouse.Variants.get/3`.
+  """
+  @spec variant(Storehouse.File.t() | String.t(), atom(), keyword()) ::
+          {:ok, Storehouse.File.t()} | {:error, term()}
+  def variant(file, preset, opts \\ []), do: Storehouse.Variants.get(file, preset, opts)
 
   @doc "Returns the URL of the file with `key`, through the adapter (`:adapter`, or `adapter/0`)."
   @spec url(Storehouse.Adapter.key(), keyword()) :: String.t()

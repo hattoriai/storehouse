@@ -8,7 +8,17 @@ exclude =
   [
     s3: !System.get_env("S3_ENDPOINT"),
     ecto: !System.get_env("DATABASE_URL"),
-    node: !System.find_executable("node")
+    node: !System.find_executable("node"),
+    # An encrypted zip opened by 7-Zip, where it is installed.
+    sevenzip: !System.find_executable("7z"),
+    # A tus client: Python's tuspy, where it is installed.
+    tuspy:
+      System.cmd(System.get_env("STOREHOUSE_PYTHON", "python3"), ["-c", "import tusclient"],
+        stderr_to_stdout: true
+      )
+      |> elem(1) != 0,
+    # A zip past 4 GB, on the disk: STOREHOUSE_LARGE=1.
+    large: !System.get_env("STOREHOUSE_LARGE")
   ]
   |> Enum.filter(&elem(&1, 1))
   |> Keyword.keys()
@@ -26,6 +36,44 @@ if url = System.get_env("DATABASE_URL") do
   end
 
   Ecto.Migrator.up(StorehouseTest.Repo, 1, StorehouseTest.ObanMigration, log: false)
+
+  # A library of files: Storehouse's tables, and an app's own of its own
+  # names, with a column of its own.
+  defmodule StorehouseTest.LibraryMigration do
+    use Ecto.Migration
+
+    alias Storehouse.Ecto.Migrations
+
+    def up do
+      Migrations.up()
+
+      Migrations.up(
+        blobs: "storehouse_test_photos",
+        usages: "storehouse_test_photo_usages"
+      )
+
+      alter(table("storehouse_test_photos"), do: add(:alt_text, :text))
+    end
+
+    def down do
+      Migrations.down(
+        blobs: "storehouse_test_photos",
+        usages: "storehouse_test_photo_usages"
+      )
+
+      Migrations.down()
+    end
+  end
+
+  Ecto.Migrator.up(StorehouseTest.Repo, 2, StorehouseTest.LibraryMigration, log: false)
+
+  StorehouseTest.Repo.query!("""
+  CREATE TABLE IF NOT EXISTS storehouse_stories (
+    id bigserial PRIMARY KEY,
+    title text,
+    blocks jsonb NOT NULL DEFAULT '[]'
+  )
+  """)
 
   StorehouseTest.Repo.query!("""
   CREATE TABLE IF NOT EXISTS storehouse_users (

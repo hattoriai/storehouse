@@ -38,6 +38,12 @@ defmodule Storehouse.S3 do
     * `:public_url` - the base URL of the files for `url/1`: a CDN, a
       custom domain. The default is the bucket's URL. A bucket that is not
       public serves its files at signed URLs (`Storehouse.signed_url/2`).
+    * `:cache_control` - the `Cache-Control` the bucket serves each file
+      with, kept with it when it is stored, uploaded from the browser,
+      streamed in or copied in: for a CDN in front. Keys are never reused,
+      so a file never changes: `"public, max-age=31536000, immutable"`.
+      The default is none, the bucket's own. A call's `:cache_control`
+      takes its place (`Storehouse.store/2`).
 
   Each file is stored with its checked content type, and with
   `Content-Disposition: attachment` for every type a browser should not
@@ -58,6 +64,7 @@ defmodule Storehouse.S3 do
   An upload presigned with its checksum (`:checksum`) is signed with
   `x-amz-checksum-sha256` too, and the bucket refuses bytes that do not
   have it: add it and `x-amz-sdk-checksum-algorithm` to `AllowedHeaders`.
+  A store with a `:cache_control` signs it too: add `cache-control`.
   """
 
   @behaviour Storehouse.Adapter
@@ -83,6 +90,10 @@ defmodule Storehouse.S3 do
 
       @doc false
       def config, do: Application.get_env(unquote(otp_app), __MODULE__, [])
+
+      @doc false
+      # What the store is, for a copy made in the store itself (`Storehouse.copy/2`).
+      def __store__, do: {Storehouse.S3, config()}
 
       @impl true
       def put(key, path, meta), do: Storehouse.S3.put(config(), key, path, meta)
@@ -119,6 +130,30 @@ defmodule Storehouse.S3 do
       def stream_close(stream), do: Storehouse.S3.stream_close(stream)
       @impl true
       def stream_abort(stream), do: Storehouse.S3.stream_abort(stream)
+      @impl true
+      def multipart_start(key, meta), do: Storehouse.S3.multipart_start(config(), key, meta)
+      @impl true
+      def multipart_sign(key, upload_id, number, opts),
+        do: Storehouse.S3.multipart_sign(config(), key, upload_id, number, opts)
+
+      @impl true
+      def multipart_put(key, upload_id, number, body),
+        do: Storehouse.S3.multipart_put(config(), key, upload_id, number, body)
+
+      @impl true
+      def multipart_parts(key, upload_id),
+        do: Storehouse.S3.multipart_parts(config(), key, upload_id)
+
+      @impl true
+      def multipart_complete(key, upload_id, parts),
+        do: Storehouse.S3.multipart_complete(config(), key, upload_id, parts)
+
+      @impl true
+      def multipart_abort(key, upload_id),
+        do: Storehouse.S3.multipart_abort(config(), key, upload_id)
+
+      @impl true
+      def multipart_uploads(prefix), do: Storehouse.S3.multipart_uploads(config(), prefix)
     end
   end
 
@@ -141,6 +176,7 @@ defmodule Storehouse.S3 do
           {"content-disposition", disposition(type)},
           {"content-length", Integer.to_string(size)}
         ] ++
+          cache_header(c, meta) ++
           if(meta[:checksum],
             do: [
               {"x-amz-sdk-checksum-algorithm", "SHA256"},
@@ -191,10 +227,9 @@ defmodule Storehouse.S3 do
       type = Map.fetch!(meta, :content_type)
 
       headers =
-        Map.merge(
-          %{"content-type" => type, "content-disposition" => disposition(type)},
-          checksum_headers(meta[:checksum])
-        )
+        %{"content-type" => type, "content-disposition" => disposition(type)}
+        |> Map.merge(checksum_headers(meta[:checksum]))
+        |> Map.merge(Map.new(cache_header(c, meta)))
 
       # The size is signed too: the bucket takes the file of that size only.
       signed =
@@ -205,6 +240,14 @@ defmodule Storehouse.S3 do
         )
 
       {:ok, %{method: "PUT", url: URI.to_string(signed), headers: headers}}
+    end
+  end
+
+  # The Cache-Control the file is served with: the call's, else the store's.
+  defp cache_header(c, meta) do
+    case meta[:cache_control] || c[:cache_control] do
+      nil -> []
+      value -> [{"cache-control", value}]
     end
   end
 
@@ -279,7 +322,8 @@ defmodule Storehouse.S3 do
            %{
              bytes: headers |> header("content-length", "0") |> String.to_integer(),
              content_type: header(headers, "content-type", nil),
-             checksum: header(headers, "x-amz-checksum-sha256", nil)
+             checksum: header(headers, "x-amz-checksum-sha256", nil),
+             modified_at: headers |> header("last-modified", nil) |> http_date()
            }}
 
         {:ok, 404, _headers, _body} ->
@@ -378,6 +422,19 @@ defmodule Storehouse.S3 do
     end
   end
 
+  # An HTTP date (`Wed, 21 Oct 2026 07:28:00 GMT`), as a DateTime, or nil.
+  defp http_date(nil), do: nil
+
+  defp http_date(text) do
+    case :httpd_util.convert_request_date(String.to_charlist(text)) do
+      {{_, _, _}, {_, _, _}} = erl ->
+        erl |> NaiveDateTime.from_erl!() |> DateTime.from_naive!("Etc/UTC")
+
+      _bad_date ->
+        nil
+    end
+  end
+
   defp modified_at(text) do
     case DateTime.from_iso8601(text) do
       {:ok, at, _offset} -> at
@@ -439,6 +496,195 @@ defmodule Storehouse.S3 do
     end
   end
 
+  # A multipart upload straight from the browser (Storehouse.presign_multipart/4):
+  # started here, each part signed for the browser's PUT with its
+  # checksum, its parts listed back from the bucket, completed with
+  # those, never with what the browser says.
+  @impl Storehouse.Adapter
+  def multipart_start(key, meta), do: multipart_start(config(), key, meta)
+
+  @doc false
+  def multipart_start(c, key, meta) do
+    with {:ok, uri} <- object_uri(c, key) do
+      type = Map.get(meta, :content_type, "application/octet-stream")
+
+      headers =
+        object_headers(type) ++ cache_header(c, meta) ++ [{"x-amz-checksum-algorithm", "SHA256"}]
+
+      case request(c, :post, query(uri, %{"uploads" => ""}), headers, nil) do
+        {:ok, 200, _headers, body} ->
+          upload_id(body)
+
+        {:ok, status, _headers, body} ->
+          {:error, {:s3, status, body}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp upload_id(body) do
+    case tag(body, "UploadId") do
+      "" -> {:error, {:s3, 200, body}}
+      id -> {:ok, unescape(id)}
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def multipart_sign(key, upload_id, number, opts),
+    do: multipart_sign(config(), key, upload_id, number, opts)
+
+  @doc false
+  def multipart_sign(c, key, upload_id, number, opts) do
+    with {:ok, uri} <- object_uri(c, key) do
+      uri = query(uri, %{"partNumber" => Integer.to_string(number), "uploadId" => upload_id})
+
+      headers =
+        if checksum = opts[:checksum], do: %{"x-amz-checksum-sha256" => checksum}, else: %{}
+
+      signed =
+        Signature.presign("PUT", uri, Keyword.get(opts, :expires_in, 3_600), credentials(c),
+          headers: Map.to_list(headers)
+        )
+
+      {:ok, %{method: "PUT", url: URI.to_string(signed), headers: headers}}
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def multipart_put(key, upload_id, number, body),
+    do: multipart_put(config(), key, upload_id, number, body)
+
+  @doc false
+  def multipart_put(c, key, upload_id, number, body) do
+    with {:ok, uri} <- object_uri(c, key),
+         {:ok, {^number, etag, checksum}} <-
+           upload_part(%{config: c, uri: uri, upload_id: upload_id}, number, body) do
+      {:ok, %{number: number, etag: etag, bytes: byte_size(body), checksum: checksum}}
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def multipart_parts(key, upload_id), do: multipart_parts(config(), key, upload_id)
+
+  @doc false
+  def multipart_parts(c, key, upload_id) do
+    with {:ok, uri} <- object_uri(c, key), do: parts_from(c, uri, upload_id, nil, [])
+  end
+
+  # ListParts, a page of a thousand at a time.
+  defp parts_from(c, uri, upload_id, marker, acc) do
+    params = %{"uploadId" => upload_id}
+    params = if marker, do: Map.put(params, "part-number-marker", marker), else: params
+
+    case request(c, :get, query(uri, params), [], nil) do
+      {:ok, 200, _headers, body} ->
+        parts =
+          for [_all, part] <- Regex.scan(~r{<Part>(.*?)</Part>}s, body) do
+            %{
+              number: part |> tag("PartNumber") |> String.to_integer(),
+              etag: part |> tag("ETag") |> unescape(),
+              bytes: part |> tag("Size") |> String.to_integer(),
+              checksum: part |> tag("ChecksumSHA256") |> then(&if(&1 == "", do: nil, else: &1))
+            }
+          end
+
+        acc = acc ++ parts
+
+        if tag(body, "IsTruncated") == "true",
+          do: parts_from(c, uri, upload_id, tag(body, "NextPartNumberMarker"), acc),
+          else: {:ok, acc}
+
+      {:ok, 404, _headers, _body} ->
+        {:error, :enoent}
+
+      {:ok, status, _headers, body} ->
+        {:error, {:s3, status, body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def multipart_complete(key, upload_id, parts),
+    do: multipart_complete(config(), key, upload_id, parts)
+
+  @doc false
+  def multipart_complete(c, key, upload_id, parts) do
+    with {:ok, uri} <- object_uri(c, key) do
+      complete(%{
+        config: c,
+        uri: uri,
+        upload_id: upload_id,
+        parts: Enum.map(parts, &{&1.number, &1.etag, &1.checksum})
+      })
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def multipart_abort(key, upload_id), do: multipart_abort(config(), key, upload_id)
+
+  @doc false
+  def multipart_abort(c, key, upload_id) do
+    with {:ok, uri} <- object_uri(c, key) do
+      case request(c, :delete, query(uri, %{"uploadId" => upload_id}), [], nil) do
+        {:ok, status, _headers, _body} when status in 200..299 or status == 404 -> :ok
+        {:ok, status, _headers, body} -> {:error, {:s3, status, body}}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  @impl Storehouse.Adapter
+  def multipart_uploads(prefix), do: multipart_uploads(config(), prefix)
+
+  @doc false
+  # The multipart uploads started under a prefix and not completed, a page
+  # at a time: for the sweeper, as abandoned ones keep their parts.
+  def multipart_uploads(c, prefix), do: uploads_from(c, prefix, nil, [])
+
+  defp uploads_from(c, prefix, markers, acc) do
+    params = %{"uploads" => "", "prefix" => prefix}
+
+    params =
+      case markers do
+        {key, id} -> Map.merge(params, %{"key-marker" => key, "upload-id-marker" => id})
+        nil -> params
+      end
+
+    case request(c, :get, query(bucket_uri(c), params), [], nil) do
+      {:ok, 200, _headers, body} ->
+        uploads =
+          for [_all, upload] <- Regex.scan(~r{<Upload>(.*?)</Upload>}s, body) do
+            %{
+              key: upload |> tag("Key") |> unescape(),
+              upload_id: upload |> tag("UploadId") |> unescape(),
+              started_at: upload |> tag("Initiated") |> modified_at()
+            }
+          end
+
+        acc = acc ++ uploads
+
+        if tag(body, "IsTruncated") == "true",
+          do:
+            uploads_from(
+              c,
+              prefix,
+              {unescape(tag(body, "NextKeyMarker")), unescape(tag(body, "NextUploadIdMarker"))},
+              acc
+            ),
+          else: {:ok, acc}
+
+      {:ok, status, _headers, body} ->
+        {:error, {:s3, status, body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   # An upload streamed through the app (Storehouse.Live.allow/3, mode:
   # :stream): its bytes, in parts of a multipart upload as they come, with
   # at most two parts on their way at once while the next ones arrive; a
@@ -462,6 +708,7 @@ defmodule Storehouse.S3 do
          key: key,
          uri: uri,
          type: type,
+         cache: cache_header(c, meta),
          part_size: part_size,
          buffer: [],
          size: 0,
@@ -487,7 +734,11 @@ defmodule Storehouse.S3 do
 
     headers =
       object_headers(stream.type) ++
-        [{"x-amz-checksum-sha256", Base.encode64(Signature.sha256(body))}]
+        stream.cache ++
+        [
+          {"x-amz-sdk-checksum-algorithm", "SHA256"},
+          {"x-amz-checksum-sha256", Base.encode64(Signature.sha256(body))}
+        ]
 
     case request(c, :put, stream.uri, headers, body) do
       {:ok, status, _headers, _body} when status in 200..299 ->
@@ -543,7 +794,9 @@ defmodule Storehouse.S3 do
 
   defp start_multipart(%{upload_id: nil} = stream) do
     c = stream.config
-    headers = object_headers(stream.type) ++ [{"x-amz-checksum-algorithm", "SHA256"}]
+
+    headers =
+      object_headers(stream.type) ++ stream.cache ++ [{"x-amz-checksum-algorithm", "SHA256"}]
 
     case request(c, :post, query(stream.uri, %{"uploads" => ""}), headers, nil) do
       {:ok, 200, _headers, body} ->
@@ -592,7 +845,8 @@ defmodule Storehouse.S3 do
 
     parts =
       Enum.map_join(stream.parts, "", fn {n, etag, checksum} ->
-        "<Part><PartNumber>#{n}</PartNumber><ETag>#{escape(etag)}</ETag><ChecksumSHA256>#{checksum}</ChecksumSHA256></Part>"
+        sum = if checksum, do: "<ChecksumSHA256>#{checksum}</ChecksumSHA256>", else: ""
+        "<Part><PartNumber>#{n}</PartNumber><ETag>#{escape(etag)}</ETag>#{sum}</Part>"
       end)
 
     body = "<CompleteMultipartUpload>#{parts}</CompleteMultipartUpload>"
@@ -624,28 +878,61 @@ defmodule Storehouse.S3 do
   def copy(from, to), do: copy(config(), from, to)
 
   @doc false
-  def copy(c, from, to) do
-    with {:ok, _from} <- object_uri(c, from),
+  def copy(c, from, to), do: copy_between(c, from, c, to)
+
+  @doc false
+  # A copy from one bucket to another the same credentials reach, in S3
+  # (CopyObject, for a file of up to 5 GB): no byte goes through the app.
+  def copy_between(from_c, from, c, to) do
+    with {:ok, _from} <- object_uri(from_c, from),
          {:ok, uri} <- object_uri(c, to) do
       source =
-        "/#{Keyword.fetch!(c, :bucket)}/" <>
+        "/#{Keyword.fetch!(from_c, :bucket)}/" <>
           Enum.map_join(String.split(from, "/"), "/", &Signature.encode/1)
 
       # A copy can fail after its 200: the error is then in the body.
-      case request(c, :put, uri, [{"x-amz-copy-source", source}], nil) do
-        {:ok, 200, _headers, body} ->
-          error_in_body(body)
-
-        {:ok, 404, _headers, _body} ->
-          {:error, :enoent}
-
-        {:ok, status, _headers, body} ->
-          {:error, {:s3, status, body}}
-
-        {:error, reason} ->
-          {:error, reason}
+      with {:ok, headers} <- copy_headers(from_c, from, c, source) do
+        copied(request(c, :put, uri, headers, nil))
       end
     end
+  end
+
+  # The copy keeps the original's headers, unless the store it goes to
+  # serves its files with a Cache-Control of its own: then they are
+  # written again, with it.
+  defp copy_headers(from_c, from, c, source) do
+    case c[:cache_control] do
+      nil ->
+        {:ok, [{"x-amz-copy-source", source}]}
+
+      cache_control ->
+        with {:ok, %{content_type: type}} <- head(from_c, from) do
+          type = type || "application/octet-stream"
+
+          {:ok,
+           [
+             {"x-amz-copy-source", source},
+             {"x-amz-metadata-directive", "REPLACE"},
+             {"x-amz-checksum-algorithm", "SHA256"},
+             {"cache-control", cache_control}
+             | object_headers(type)
+           ]}
+        end
+    end
+  end
+
+  defp copied({:ok, 200, _headers, body}), do: error_in_body(body)
+  defp copied({:ok, 404, _headers, _body}), do: {:error, :enoent}
+  defp copied({:ok, status, _headers, body}), do: {:error, {:s3, status, body}}
+  defp copied({:error, reason}), do: {:error, reason}
+
+  @doc false
+  # Whether a copy from one store's bucket to another's can be made in S3:
+  # the same endpoint, region and credentials.
+  def same_account?(from_c, c) do
+    Enum.all?([:endpoint, :region, :access_key_id, :secret_access_key, :session_token], fn key ->
+      from_c[key] == c[key]
+    end)
   end
 
   defp error_in_body(body), do: if(body =~ "<Error>", do: {:error, {:s3, 200, body}}, else: :ok)
@@ -734,6 +1021,9 @@ defmodule Storehouse.S3 do
   # This store's config; a store of `use Storehouse.S3` has its own.
   def config, do: Application.get_env(:storehouse, __MODULE__, [])
 
+  @doc false
+  def __store__, do: {__MODULE__, config()}
+
   # A signed request, with :httpc. A file's body is streamed from the disk.
   defp request(c, method, uri, headers, body) do
     {:ok, _apps} = Application.ensure_all_started([:inets, :ssl])
@@ -761,7 +1051,7 @@ defmodule Storehouse.S3 do
     request =
       case body do
         nil when method in [:put, :post] ->
-          {url, request_headers, ~c"application/octet-stream", ""}
+          {url, request_headers, String.to_charlist(type), ""}
 
         nil ->
           {url, request_headers}

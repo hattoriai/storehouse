@@ -9,6 +9,145 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Added
 
+- Resumable uploads by the tus protocol (1.0.0, with creation,
+  creation-with-upload, termination and expiration):
+  `Storehouse.Tus.Plug`, through the app, into a bucket's multipart
+  upload a part at a time (the adapter's `multipart_put/4`), or into a
+  file stored when it is whole, checked as every upload is; the uploads
+  in progress kept in ETS by `Storehouse.Tus`, which gives up those that
+  expired, or in a `Storehouse.Tus.State` of the app's. Tested against
+  tuspy, a tus client.
+
+- Very large files sent from the browser straight to the bucket in parts:
+  `Storehouse.presign_multipart/4` (checked as `presign_upload/4` is,
+  with parts of a size S3 takes), `presign_parts/4` (each part signed
+  with its SHA-256), `multipart_parts/3` (what the store has, to go on
+  after a reload), `complete_multipart/4` (put together from the store's
+  parts, never the browser's word, a missing part or another size
+  refused, then checked as `verify_upload/2` checks) and
+  `abort_multipart/3`; the adapter callbacks behind them, which
+  `Storehouse.S3` has; `Storehouse.Plug.Multipart`, the same as JSON
+  endpoints; and the JavaScript client sending large files in parts, a
+  few at a time, each tried again, remembered across reloads.
+  `Storehouse.Sweeper` gives up multipart uploads never completed.
+- A library of files, optional: `Storehouse.Ecto.Migrations` makes a
+  table of files (`storehouse_blobs`, or the app's own names) and of
+  which records use them; `Storehouse.Ecto.Blob` puts a stored file in
+  it (the same file of the same owner one row, `{:existing, blob}`),
+  gives it back as a file, and checks ids are an owner's
+  (`owned/4`, `validate_owned/5`); `Storehouse.Ecto.Usage` keeps each
+  record's set of files (`record/4`, from ids in JSON as much as in
+  columns), says what uses a file (`used_by/3`), and refuses to delete
+  one in use (`delete/3`, `{:error, {:in_use, records}}`), with the
+  database's foreign key behind it. `Storehouse.Ecto.Blob.Schema` for a
+  schema of the app's own.
+- A CDN in front: `:cache_control` on `Storehouse.S3` (and per call, on
+  `store/2` and `presign_upload/4`) keeps a `Cache-Control` with each
+  file, however it came in (stored, presigned and signed, streamed,
+  copied or promoted); `Storehouse.Local.Plug` takes `:cache_control`
+  too. `Storehouse.Purge` tells the CDN to forget a file deleted, its
+  variants and the app's routes to it, by URL, `Cache-Tag` or prefix, as
+  a job of the runner whose arguments never hold the credentials;
+  `Storehouse.Purge.Cloudflare` is one purger. `Storehouse.Proxy` streams
+  a file the app authorises through the app, with ranges, `ETag`,
+  `Last-Modified` and `304`s. A store's `head` gives `:modified_at`.
+- Responsive images: `Storehouse.Responsive.resolve/3`, a photograph's
+  `src`, `srcset`, `sizes`, size, placeholder, colour and hashes from a
+  preset's ladder (never wider than the original, each width at its
+  step), as JSON or as `Storehouse.Components.img/1`; `urls/3`, `warm/3`
+  and `warm_later/3`, which make its sizes before the first visitor asks
+  (in the app, or over HTTP through imgproxy and a CDN), on the app's
+  runner, off unless configured; and `Storehouse.Analyzer.Warm`.
+- Variants: `Storehouse.variant_url/3` and `Storehouse.variant/3`, by
+  presets only (`Storehouse.Variants`: widths or a ladder of them, a box
+  to fit or fill, a crop's focus, formats chosen by `Accept`, quality,
+  colour profile, metadata), at URLs that change only when their preset
+  does. A renderer (`Storehouse.Renderer`) makes them in the app
+  (`Storehouse.Renderer.Vix`, libvips: never enlarged, turned per EXIF,
+  without metadata), once across a cluster's nodes, stored under
+  `variants/<key>/` and served by `Storehouse.Variants.Plug` for a year;
+  or gives URLs of a service (`Storehouse.Renderer.Imgproxy`, signed), or
+  is the app's own. Deleting an original deletes its variants.
+- Placeholders: `Storehouse.Analyzer.Placeholder`, a step that makes a
+  photograph's placeholder while it loads (a tiny WebP, JPEG or PNG as a
+  data URI) and its average colour, with libvips through Vix (optional),
+  shrinking it as it loads, turned as its EXIF says, in sRGB, with none of
+  its metadata. Or as a hash, for a frontend to decode:
+  `Storehouse.Analyzer.ThumbHash` and `Storehouse.Analyzer.BlurHash`, of
+  `Storehouse.ThumbHash` and `Storehouse.BlurHash`, encoders in plain
+  Elixir that give the reference implementations' bytes.
+- Archives: `Storehouse.Archive` makes an archive of stored files,
+  binaries, the app's functions and streams as a stream (`stream/2`), into
+  the store as it is made (`store/3`, S3's multipart upload), or out of
+  the request as a job of the app's runner, then the app's function with
+  it (`store_later/3`), with nothing on the disk and no more than a chunk
+  in memory. Its formats are of `Storehouse.Archive.Format`: zip
+  (`Storehouse.Archive.Zip`, the default: deflate where it shrinks,
+  AES-256 with a password, ZIP64 past 4 GB or 65,535 files), tar
+  (`Storehouse.Archive.Tar`, pax headers, gzipped when it shrinks), or the
+  app's. `max_bytes:` splits it in whole archives, `expires_in:` makes it
+  expire, and `size/2` gives its size before it is made. Names that could
+  leave the folder are refused, and a stored file whose size changed
+  stops it.
+- Files that expire: `store/2`'s `:expires_in` keeps a file under an
+  expiring key (`Storehouse.expiring_key/2`: the prefix
+  `Storehouse.expiring_prefix/0`, the days it is kept, when it expires),
+  for a bucket's lifecycle rule of that many days; `Storehouse.Sweeper`
+  deletes them on stores with none, `Storehouse.expires_at/1` says when,
+  and `signed_url/2` never signs past it (`{:error, :expired}` after).
+- Reprocessing: `Storehouse.Ecto.reprocess/5` runs analysis steps over
+  the files of a field in every record a query gives, a batch at a time
+  in the order of the primary key, skipping files that have every step's
+  result already (or with `:force`, none), so it can be stopped and run
+  again; as jobs of the app's runner, or `now: true` where it is called,
+  with `:after` to start after a primary key and `:on_progress`.
+  `mix storehouse.reprocess` runs it with its progress.
+- Work out of the request, on a runner the app chooses
+  (`Storehouse.Runner`): a file's analysis later, deletions later and a
+  mirror's copies are jobs (`Storehouse.Job`, a worker and arguments JSON
+  holds), kept and retried by the runner. `Storehouse.Runner.Oban` keeps
+  them in Oban, through deploys, on the queue and instance of
+  `config :storehouse, Storehouse.Runner.Oban`, and is the default when
+  the app runs Oban; `Storehouse.Runner.Memory` keeps them in a process of
+  the app's otherwise; an app's own module (another job system, a
+  workflow engine) takes either's place, in `config :storehouse, :runner`
+  or a call's `:runner`. Telemetry `[:storehouse, :job, ...]` for each
+  run and each job given up.
+- Moving between stores: `Storehouse.copy/2` copies a file from one
+  store to another (in S3 itself between buckets the same credentials
+  reach, on the disk between two local stores, else a chunk at a time
+  with its checksum checked) and `Storehouse.copy_prefix/2` copies many,
+  several at once, skipping those already there, so it can run again;
+  `mix storehouse.copy` runs it with its progress. `Storehouse.Mirror` is
+  a store that writes to a primary and copies each file to its mirrors
+  as jobs of the app's runner, retried until they answer, never failing
+  the primary's write. The optional adapter callback `uploaded/1` is told
+  of a file uploaded straight to the store once `verify_upload/2` keeps
+  it. A file streamed to S3 in one request now keeps its checksum there
+  too.
+- Editing a photo's metadata without re-encoding it, only when asked:
+  `Storehouse.JPEG` removes the location (`strip(jpeg, :gps)`, the Exif
+  GPS directory zeroed and XMP's GPS properties removed), keeps only the
+  tags named (`strip(jpeg, {:keep, tags})`), and writes the author's
+  name, copyright and description (`put_tags/2`), in a JPEG's own
+  segments, its tables and image data copied byte for byte and an MPF
+  index of the pictures after it kept right. `Storehouse.Analyzer.EditMetadata`
+  is the step that writes the edited file back over the original, its
+  checksum and size now in its result, while the file's `:checksum`
+  stays the upload's. It reads only a photo's metadata into memory
+  (`Storehouse.JPEG.edit_file/3`). What makes the changes is a
+  `Storehouse.MetadataEditor`, Storehouse's own (`Builtin`, JPEG) unless
+  the step's `:editor` or `config :storehouse, :metadata_editor` names
+  one of the app's, around ExifTool for other types. A step may now give
+  `{:ok, result, path}`: the steps after it read the file it left.
+- PNG and WebP metadata, edited as a JPEG's: `Storehouse.PNG` (Exif,
+  XMP and text chunks, each with its checksum; written tags also as the
+  `Author`, `Copyright` and `Description` text readers show; an APNG's
+  frames copied) and `Storehouse.WebP` (Exif and XMP chunks, and the
+  `VP8X` header's flags; a simple WebP given a header when it is given
+  Exif; an animation's frames copied), both reading only the metadata
+  chunks into memory. `Storehouse.MetadataEditor.Builtin` edits all
+  three.
 - Reading a file back: `Storehouse.head/2` (its size, stored type and
   checksum, without reading it), `Storehouse.read/2` (all of it, refused
   past `:max_bytes` before a byte is read), `Storehouse.stream/2` (a chunk
@@ -20,11 +159,11 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   time) and `Storehouse.delete_prefix/2` (a thousand at a time, with S3's
   DeleteObjects), with the optional adapter callbacks `list/1` and
   `delete_many/1`. `Storehouse.delete_later/2` and
-  `Storehouse.delete_prefix_later/2` queue deletions in
-  `Storehouse.Cleaner`, a process of the app's that tries them again until
-  the store answers, and sweeps the temporary files older than a day on
-  stores with no lifecycle rules (`:sweep`, one node of a cluster at a
-  time; `Storehouse.Cleaner.sweep/1` at once).
+  `Storehouse.delete_prefix_later/2` delete as jobs of the app's runner,
+  tried again until the store answers, and `Storehouse.Sweeper` deletes
+  the temporary files older than a day on stores with no lifecycle rules
+  (one node of a cluster at a time; `Storehouse.Sweeper.sweep/1` at
+  once).
 - `Storehouse.Memory`, a store in memory for tests: every callback, each
   test's files its own (`checkout/0`, `allow/2`, `$callers`) so async
   tests never share them, `fail_next/2` for error paths, and
@@ -47,9 +186,8 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   `analyzed/2` and kept in the column by `Storehouse.Ecto.File`. `Storehouse.analyze/3` runs steps at once, each once (or again
   with `force: true`), a failure kept with why; `store/2`'s `:analyze`
   runs them on the file just stored, from its path.
-  `Storehouse.analyze_later/3` runs them in `Storehouse.Tasks`, a
-  supervisor of the app's, or in Oban (`runner: :oban`,
-  `Storehouse.Oban.Analyze`), then calls the app's `:then`.
+  `Storehouse.analyze_later/3` runs them as a job of the app's runner,
+  then calls the app's `:then`.
   `Storehouse.Ecto.analyze_later/5`, and `insert/3` and `update/3` with
   `:analyze`, save the results in the record's column. A span per step,
   `[:storehouse, :analyze, ...]`. `Storehouse.Analyzer.Size`, a step that
@@ -108,6 +246,14 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   request, a few sent at once and each tried again on a network error or
   the store's 5xx, registered in batches; a result, progress and cancel
   for each. Types in `storehouse-client.d.mts`.
+
+### Fixed
+
+- The plugs of uploads from any client (`Storehouse.Plug.Presign`,
+  `Register`, `Multipart`) lost their options when a server called their
+  `init/1` again on options already made (Bandit with `plug: {plug, opts}`).
+- `Storehouse.S3` sent a `PUT` without a body (a copy) as
+  `application/octet-stream`, whatever type it signed.
 
 ### Changed
 

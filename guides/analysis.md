@@ -67,17 +67,9 @@ Storehouse.File.analysis(file, "pages")
 ## Later, and saved
 
 Most analysis should not hold up a request. `Storehouse.analyze_later/3`
-runs it in a process of the app's, then gives the file with its results to
-a function of yours, to save them:
-
-```elixir
-# lib/my_app/application.ex
-children = [
-  MyApp.Repo,
-  {Storehouse.Tasks, max_children: 4},
-  MyAppWeb.Endpoint
-]
-```
+runs it as a job of the app's runner (Oban's when the app runs Oban, see
+[Work out of the request](background.md)), then gives the file with its
+results to a function of yours, to save them:
 
 ```elixir
 Storehouse.analyze_later(file, [MyApp.Analyzers.Pages],
@@ -100,18 +92,158 @@ Storehouse.Ecto.analyze_later(Repo, user, :avatar, [MyApp.Analyzers.Colors])
 `update/3` and `insert/3` analyze only the files the save put in the
 field.
 
-## With Oban
+## Again, over files stored before
 
-`Storehouse.Tasks` keeps its work in memory: a deploy in the middle of it
-loses it. With Oban in the app, `runner: :oban` runs the steps in a job
-(`Storehouse.Oban.Analyze`, on the `:storehouse` queue), retried when the
-store fails:
+A step added a year in, a step that failed, files from before analysis
+existed: `Storehouse.Ecto.reprocess/5` runs steps over the files of a
+field in every record of a table, a batch at a time in the order of the
+primary key, so a table of any size takes the memory of a batch:
 
 ```elixir
-config :my_app, Oban, queues: [default: 10, storehouse: 4]
-
-Storehouse.Ecto.analyze_later(Repo, user, :avatar, steps, runner: :oban)
+Storehouse.Ecto.reprocess(Repo, MyApp.Photo, :image, [Storehouse.Analyzer.Placeholder])
+#=> {:ok, %{records: 10_000, files: 9_412, skipped: 588, failed: []}}
 ```
+
+A file that has every step's result already is skipped, so it can be
+stopped and run again, and does only what is missing; `force: true` runs
+every one again. Each file is a job of the app's runner; `now: true` runs
+them where it is called, and saves their results before it returns. From
+the command line, with its progress:
+
+```sh
+mix storehouse.reprocess --repo MyApp.Repo --schema MyApp.Photo --field image \
+  --step Storehouse.Analyzer.Placeholder --now
+```
+
+## A placeholder while a photograph loads
+
+`Storehouse.Analyzer.Placeholder` makes what a page paints before a
+photograph arrives: a tiny version of it, a few hundred bytes as a data
+URI that the browser stretches into a soft blur, and its average colour.
+It needs libvips, through Vix:
+
+```elixir
+# mix.exs
+{:vix, "~> 0.31"}
+
+Storehouse.store(upload.path, analyze: [Storehouse.Analyzer.Placeholder])
+
+Storehouse.File.analyzed(file, :placeholder)
+#=> %{"placeholder" => "data:image/webp;base64,UklGR…", "color" => "#9a7b76",
+#     "width" => 16, "height" => 11}
+```
+
+It shrinks the photograph as libvips loads it, so a 6000 × 4000 JPEG
+(18 MB) takes about 150 ms where decoding it whole takes 260, and a few
+kilobytes of memory past what the decoder holds. It is turned as its EXIF
+says, put in sRGB, and saved with none of the original's metadata: no
+place, no camera, no colour profile. Its options say how large (`:size`,
+16 pixels on the longest edge), in what (`:format`, `:webp`, `:jpeg` or
+`:png`; `:quality`, 40), and on what colour a photograph with
+transparency is laid (`:background`, `"#rrggbb"`); without it, WebP and
+PNG keep the transparency.
+
+A file libvips cannot read fails the step, with why, and the page shows
+its colour of choice instead. Which formats it reads is libvips's: the
+precompiled one Vix brings reads JPEG, PNG, WebP, TIFF, GIF and AVIF, not
+HEIC; build Vix against your system's libvips for more.
+
+In a page, under the photograph:
+
+```heex
+<img src={@photo.url} width={@photo.width} height={@photo.height} loading="lazy"
+     style={"background: #{@photo.color} url(#{@photo.placeholder}) center / cover"} />
+```
+
+and in JSON, for a frontend, with `Storehouse.File.to_map(file, analysis:
+[:placeholder])`.
+
+### Or a hash, for a frontend to decode
+
+Two more steps give the placeholder as a hash, for a page that decodes it
+with a script, each under its own name:
+
+```elixir
+Storehouse.store(upload.path,
+  analyze: [Storehouse.Analyzer.ThumbHash, Storehouse.Analyzer.BlurHash]
+)
+
+Storehouse.File.analyzed(file, :thumbhash)
+#=> %{"thumbhash" => "oTgSNY53eIePiIeGd2iHeXd/iPho", "color" => "#9a7b76",
+#     "width" => 100, "height" => 67}
+Storehouse.File.analyzed(file, :blurhash)
+#=> %{"blurhash" => "L~K++djbazs:}?oLf7oLoboLfjaf", "color" => "#9a7b76",
+#     "width" => 32, "height" => 21}
+```
+
+| | Size | Shows without a script | Transparency | Decoded with |
+|---|---|---|---|---|
+| `Storehouse.Analyzer.Placeholder` | 100 to 400 bytes | Yes, a data URI | Yes (WebP, PNG) | the browser |
+| `Storehouse.Analyzer.ThumbHash` | about 25 bytes | No | Yes | `thumbhash` (npm), ports in most languages |
+| `Storehouse.Analyzer.BlurHash` | 20 to 30 characters | No | No | `blurhash` (npm), `react-blurhash`, ports in most languages |
+
+ThumbHash is truer to a photograph's colours, and keeps its proportions
+in the hash. BlurHash is the one most services and components already
+know. Their encoders, `Storehouse.ThumbHash` and `Storehouse.BlurHash`,
+give the same bytes as the reference implementations from any pixels.
+They are plain Elixir, for an app that has its pixels from elsewhere.
+
+## A step that changes the file
+
+Analysis reads a file and leaves it as it is, with one exception you add
+yourself: `Storehouse.Analyzer.EditMetadata` edits the metadata inside a
+JPEG, PNG or WebP (`Storehouse.JPEG`, `Storehouse.PNG`, `Storehouse.WebP`)
+and writes the file back over the original.
+It is never run unless named, and it never re-encodes the image: the
+pixels are the same ones, byte for byte. Only the metadata is read into
+memory; the image data is copied from file to file, so a 50 MB photo
+takes the memory of its metadata.
+
+```elixir
+steps = [
+  # Before anything reads it: the steps after it read the edited file.
+  {Storehouse.Analyzer.EditMetadata, strip: :gps, put: %{copyright: "© Ana Sousa"}},
+  MyApp.Analyzers.Exif
+]
+
+Storehouse.store(upload.path, analyze: steps)
+```
+
+`strip: {:keep, [:orientation, :copyright]}` keeps only the tags named
+and removes XMP, IPTC, comments and other text too. Other formats (HEIC,
+AVIF, TIFF) are skipped, and a file that cannot be read fails the step and
+is left as it was.
+
+What makes the changes is a `Storehouse.MetadataEditor`. Storehouse's
+own edits JPEG, PNG and WebP; for other types (HEIC, TIFF, a camera's raw files),
+or another tool altogether, an editor of your app's takes its place, for
+every step or for one, with no other change:
+
+```elixir
+config :storehouse, :metadata_editor, MyApp.ExifTool
+
+{Storehouse.Analyzer.EditMetadata, strip: :gps, editor: MyApp.ExifTool}
+```
+
+The changes are the same whichever editor makes them, and
+`Storehouse.MetadataEditor` shows one around ExifTool.
+
+The file's `:checksum` stays the one of the upload, so `:existing` still
+finds the same photo uploaded again. The step's result has the stored
+file's own `"checksum"` and `"bytes"` now:
+
+```elixir
+Storehouse.File.analyzed(file, :edit_metadata)
+#=> %{"changed" => true, "stripped" => "gps", "put" => ["copyright"],
+#     "bytes" => 2_144, "checksum" => "q1…="}
+```
+
+## Kept through a deploy
+
+The steps run in a job of the app's runner: with Oban, kept in the
+database and tried again when the store fails, so a deploy in the middle
+of them loses nothing. [Work out of the request](background.md) says how
+the runner is chosen, and how to give its queue.
 
 ## Telemetry
 

@@ -19,6 +19,12 @@ defmodule StorehouseTest.ClientApp do
     init_opts: [owner: "accounts/42", accept: Storehouse.Check.images()]
   )
 
+  # Large files in parts, straight to the bucket at S3_ENDPOINT.
+  forward("/files/multipart",
+    to: Storehouse.Plug.Multipart,
+    init_opts: [owner: "accounts/42", adapter: Storehouse.S3, part_bytes: 5_242_880]
+  )
+
   match _ do
     send_resp(conn, 404, "")
   end

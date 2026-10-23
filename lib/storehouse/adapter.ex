@@ -58,14 +58,17 @@ defmodule Storehouse.Adapter do
   @typedoc """
   What Storehouse knows of the file: `:name` (the client's name, for
   display only), `:content_type` (checked on the server, `Storehouse.Check`),
-  `:bytes`, and `:checksum` (its SHA-256, in Base64), which a store that
-  can checks as it takes the file (`Storehouse.S3` does).
+  `:bytes`, `:checksum` (its SHA-256, in Base64), which a store that
+  can checks as it takes the file (`Storehouse.S3` does), and
+  `:cache_control`, the `Cache-Control` a store that keeps headers serves
+  it with.
   """
   @type meta :: %{
           optional(:name) => String.t(),
           optional(:content_type) => String.t(),
           optional(:bytes) => non_neg_integer(),
-          optional(:checksum) => String.t()
+          optional(:checksum) => String.t(),
+          optional(:cache_control) => String.t()
         }
 
   @doc """
@@ -116,13 +119,15 @@ defmodule Storehouse.Adapter do
 
   @typedoc """
   What a store knows of a file without reading it: its size in `:bytes`,
-  its `:content_type` as stored (or `nil`), and its `:checksum`, the
-  SHA-256 in Base64 (or `nil` when the store keeps none).
+  its `:content_type` as stored (or `nil`), its `:checksum`, the SHA-256
+  in Base64 (or `nil` when the store keeps none), and when it was last
+  written, `:modified_at`, where the store says.
   """
   @type head :: %{
-          bytes: non_neg_integer(),
-          content_type: String.t() | nil,
-          checksum: String.t() | nil
+          required(:bytes) => non_neg_integer(),
+          required(:content_type) => String.t() | nil,
+          required(:checksum) => String.t() | nil,
+          optional(:modified_at) => DateTime.t() | nil
         }
 
   @doc """
@@ -192,7 +197,71 @@ defmodule Storehouse.Adapter do
   @doc "Gives up a streamed file: nothing of it stays in the store."
   @callback stream_abort(stream :: term()) :: :ok
 
-  @optional_callbacks presign_upload: 3,
+  @doc """
+  Told that a file the browser uploaded straight to the store
+  (`c:presign_upload/3`) was checked and kept (`Storehouse.verify_upload/2`):
+  for a store that does more with a file it takes (`Storehouse.Mirror`
+  copies it to its mirrors). Optional.
+  """
+  @callback uploaded(key()) :: :ok
+
+  @typedoc "A part of a multipart upload, as the store has it."
+  @type part :: %{
+          number: pos_integer(),
+          etag: String.t(),
+          bytes: non_neg_integer(),
+          checksum: String.t() | nil
+        }
+
+  @doc """
+  Starts a multipart upload of a file under `key`, of `meta`'s type, that
+  the browser sends in parts straight to the store
+  (`Storehouse.presign_multipart/4`): `{:ok, upload_id}`. Optional, with
+  the other `multipart_` callbacks: `Storehouse.S3` has them.
+  """
+  @callback multipart_start(key(), meta()) :: {:ok, String.t()} | {:error, term()}
+
+  @doc """
+  Signs the browser's `PUT` of part `number`, with its SHA-256 in Base64
+  (`:checksum`) when it is given, so that the store refuses other bytes:
+  `{:ok, %{method: "PUT", url: …, headers: %{…}}}`.
+  """
+  @callback multipart_sign(key(), String.t(), pos_integer(), keyword()) ::
+              {:ok, %{method: String.t(), url: String.t(), headers: map()}} | {:error, term()}
+
+  @doc "The parts the store has of an upload: `{:ok, parts}`, by number."
+  @callback multipart_parts(key(), String.t()) :: {:ok, [part()]} | {:error, term()}
+
+  @doc """
+  Sends part `number` of an upload from the app itself (`Storehouse.Tus.Plug`),
+  with its SHA-256, which the store checks: `{:ok, part}`.
+  """
+  @callback multipart_put(key(), String.t(), pos_integer(), binary()) ::
+              {:ok, part()} | {:error, term()}
+
+  @doc "Puts the parts together: the file is then under its key."
+  @callback multipart_complete(key(), String.t(), [part()]) :: :ok | {:error, term()}
+
+  @doc "Gives up an upload: its parts are deleted."
+  @callback multipart_abort(key(), String.t()) :: :ok | {:error, term()}
+
+  @doc """
+  The uploads under `prefix` started and neither completed nor given up,
+  with their `:key`, `:upload_id` and `:started_at`: for the sweeper.
+  """
+  @callback multipart_uploads(prefix :: String.t()) ::
+              {:ok, [%{key: key(), upload_id: String.t(), started_at: DateTime.t()}]}
+              | {:error, term()}
+
+  @optional_callbacks uploaded: 1,
+                      multipart_start: 2,
+                      multipart_sign: 4,
+                      multipart_put: 4,
+                      multipart_parts: 2,
+                      multipart_complete: 3,
+                      multipart_abort: 2,
+                      multipart_uploads: 1,
+                      presign_upload: 3,
                       signed_url: 2,
                       read_head: 2,
                       head: 1,

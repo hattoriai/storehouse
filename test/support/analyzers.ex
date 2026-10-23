@@ -16,6 +16,17 @@ defmodule StorehouseTest.Analyzers do
     defp notify(message, opts), do: if(pid = opts[:test], do: send(pid, message))
   end
 
+  defmodule Contents do
+    @moduledoc false
+    @behaviour Storehouse.Analyzer
+
+    @impl true
+    def analyze(_file, path, opts) do
+      send(opts[:test], {:contents, path, File.read!(path)})
+      {:ok, %{}}
+    end
+  end
+
   defmodule Head do
     @moduledoc false
     @behaviour Storehouse.Analyzer
