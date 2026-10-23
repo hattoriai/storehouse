@@ -124,7 +124,8 @@ config :storehouse, Storehouse.Local,
 Write a module with the three callbacks of `Storehouse.Adapter`
 (`put/3`, `url/1` and `delete/1`), and the optional ones for direct
 uploads and signed URLs (`presign_upload/3`, `read_head/2`,
-`signed_url/2`), and name it in the config:
+`signed_url/2`) and for reading files back (`head/1`, `read_range/3`),
+and name it in the config:
 
 ```elixir
 config :storehouse, adapter: MyApp.Storage
@@ -171,6 +172,35 @@ its copy.
 ```elixir
 {:ok, file} = Storehouse.store("priv/seeds/timeline.png", name: "Timeline.png")
 ```
+
+## Reading files back
+
+A file the app keeps is read back to work on it: its metadata read, a
+smaller image made of it, sent on to another service, put in a zip.
+`Storehouse.head/2` gives what the store knows of it without reading it,
+and `Storehouse.read/2`, `Storehouse.stream/2` and
+`Storehouse.download/3` give its bytes:
+
+```elixir
+{:ok, %{bytes: bytes, content_type: type}} = Storehouse.head(file)
+
+# All at once, for a file of a known, small size.
+{:ok, binary} = Storehouse.read(file, max_bytes: 50_000_000)
+
+# A chunk at a time, into a zip or a response, with no more of it in memory than a chunk.
+{:ok, stream} = Storehouse.stream(file, chunk_bytes: 8_388_608)
+Enum.into(stream, File.stream!("export/" <> file.name))
+
+# To the disk, for a tool that wants a path.
+:ok = Storehouse.download(file, "/tmp/original.jpg")
+```
+
+The size a browser declares when it uploads straight to the store is a
+claim. Give `:max_bytes`: the store is asked the file's size first, and
+a larger file gives `{:error, {:too_large, bytes}}` before a byte of it is
+read. A stream reads each chunk as it is taken, and raises
+`Storehouse.ReadError` when the store fails halfway; `download/3` gives
+that error as `{:error, reason}`, and leaves nothing at the path.
 
 ## Files from an address
 

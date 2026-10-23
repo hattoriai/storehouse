@@ -16,8 +16,8 @@ your app.
 > (and the stores that speak its API), uploads straight to the store,
 > uploads streamed through the app with no temporary file, files in
 > Ecto records (temporary until saved, permanent then), signed URLs for
-> private files, checksums, telemetry, files from an address, and
-> LiveView uploads are here. Before 1.0,
+> private files, checksums, telemetry, files from an address, reading
+> files back, and LiveView uploads are here. Before 1.0,
 > a minor version may change the API; see the roadmap for what comes
 > next.
 
@@ -73,12 +73,15 @@ It gives your app:
 * **files from an address**, from the hosts you allow only, with
   redirects checked and the download stopped at the size limit: an image
   pasted by its address, a file an agent names;
+* **files read back**: a file's size and type without reading it, its
+  bytes all at once, as a stream a chunk at a time, or to a path, each
+  refused past a size limit before a byte is read;
 * **limits**: the largest file, the most pixels of an image, the types
   you take;
 * **checksums**: each file's SHA-256, kept with it, and checked by S3 as
   it takes the file;
 * **telemetry**: `:telemetry` spans for storing, fetching, signing,
-  checking and deleting, with what was refused and why;
+  checking, reading and deleting, with what was refused and why;
 * **previews**: a function of yours gives a smaller image of a file (a
   thumbnail, a PDF's first page), kept with it.
 
@@ -180,6 +183,34 @@ The guides: [Stores](guides/stores.md) (the local disk, S3, LocalStack,
 development), [Direct uploads](guides/direct_uploads.md) (and streamed
 ones), [Ecto](guides/ecto.md), [Private files](guides/private_files.md),
 [Serving](guides/serving.md) and [LiveView](guides/liveview.md).
+
+## How Storehouse compares
+
+The Elixir libraries that keep an app's files, as their documentation
+and code describe them in October 2026. This table follows Storehouse's
+releases: each change to one of its rows updates it. A correction about
+another library is welcome as an issue.
+
+| | Storehouse | [Waffle](https://hex.pm/packages/waffle) 2.0 | [Capsule](https://hex.pm/packages/capsule) 1.0 | [phx_media_library](https://hex.pm/packages/phx_media_library) 0.10 | [attached](https://hex.pm/packages/attached) 0.2 |
+|---|---|---|---|---|---|
+| A file's type from its bytes, a safe key | Yes | From its extension | No | Partly | Partly |
+| Serving with safe headers (`nosniff`, a sandboxing CSP, ranges) | Yes | — | — | — | — |
+| Uploads straight to the store | Yes, checked by their first bytes | No | No | Yes | Presigned only |
+| Uploads streamed through the app, no temporary file | Yes | No | No | No | No |
+| Temporary until saved, then permanent | Yes | No | By hand | Partly | No |
+| Checksums, checked by the store | Yes | No | No | Yes | Yes |
+| Files from an address | Yes, from allowed hosts only | Yes, size-capped | No | No | No |
+| LiveView uploads | Yes | No | No | Partly | No |
+| Reading a file back | Yes | Yes | Yes | Yes | Yes |
+| Several stores at once | Not yet ([#1](https://github.com/hattoriai/storehouse/issues/1)) | Per uploader | Per file | Yes | One at a time |
+| Work after the upload, analysis | Not yet ([#3](https://github.com/hattoriai/storehouse/issues/3)) | No | No | Yes | Yes, on Oban |
+| Variants | Not yet ([#6](https://github.com/hattoriai/storehouse/issues/6)) | Made at upload | No | Yes | On demand |
+| Placeholders while an image loads | Not yet ([#4](https://github.com/hattoriai/storehouse/issues/4)) | No | No | Yes | No |
+| A table of files | Not yet ([#16](https://github.com/hattoriai/storehouse/issues/16)) | No | No | Yes | Yes |
+| The same file uploaded again is the one kept | Not yet ([#15](https://github.com/hattoriai/storehouse/issues/15)) | No | No | No | No |
+| Endpoints and a client for frontends without LiveView | Not yet ([#10](https://github.com/hattoriai/storehouse/issues/10), [#11](https://github.com/hattoriai/storehouse/issues/11)) | No | No | Presign and complete | No |
+| Resumable and multipart uploads from the browser | Not yet ([#12](https://github.com/hattoriai/storehouse/issues/12)) | No | No | No | No |
+| Dependencies | None | Req, ImageMagick | None | Several | Oban, Vix |
 
 ## Roadmap
 

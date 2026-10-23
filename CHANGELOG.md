@@ -7,6 +7,16 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+### Added
+
+- Reading a file back: `Storehouse.head/2` (its size, stored type and
+  checksum, without reading it), `Storehouse.read/2` (all of it, refused
+  past `:max_bytes` before a byte is read), `Storehouse.stream/2` (a chunk
+  at a time, as the stream is taken; `Storehouse.ReadError` when the
+  store fails halfway) and `Storehouse.download/3` (to a path). The
+  optional adapter callbacks `head/1` and `read_range/3`
+  (`Storehouse.Local`, `Storehouse.S3`), and telemetry spans for each.
+
 ## [0.1.0]
 
 The first release: the storage of Kotoba and Hakushi, taken out of them.
