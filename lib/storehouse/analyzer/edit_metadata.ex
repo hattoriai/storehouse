@@ -24,7 +24,7 @@ defmodule Storehouse.Analyzer.EditMetadata do
     * `:editor` - what makes the changes (`Storehouse.MetadataEditor`).
       The default is `config :storehouse, :metadata_editor`, else
       Storehouse's own, `Storehouse.MetadataEditor.Builtin`, which edits
-      JPEG.
+      JPEG, PNG and WebP.
 
   With neither change, or for a type the editor does not edit, the step
   is `:skipped` and the file left as it is. A file the editor cannot read

@@ -114,6 +114,8 @@ defmodule Storehouse.MixProject do
           Storehouse.MetadataEditor,
           Storehouse.MetadataEditor.Builtin,
           Storehouse.JPEG,
+          Storehouse.PNG,
+          Storehouse.WebP,
           Storehouse.Tasks,
           Storehouse.Oban.Analyze
         ],
