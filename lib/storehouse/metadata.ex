@@ -45,7 +45,7 @@ defmodule Storehouse.Metadata do
   @spec normalize(map()) :: {:ok, map()} | {:error, {:invalid_metadata, path()}}
   def normalize(metadata) when is_map(metadata) and not is_struct(metadata) do
     with {:ok, normalized} <- value(metadata, [], 0) do
-      if IO.iodata_length(JSON.encode_to_iodata!(normalized)) <= @max_bytes,
+      if IO.iodata_length(Storehouse.JSON.encode_to_iodata!(normalized)) <= @max_bytes,
         do: {:ok, normalized},
         else: {:error, {:invalid_metadata, []}}
     end
