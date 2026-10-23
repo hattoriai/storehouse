@@ -170,14 +170,9 @@ defmodule Storehouse do
   defp analyze_stored(file, path, adapter, steps),
     do: Storehouse.Analyzer.run(file, steps, path: path, adapter: adapter)
 
-  # The metadata a new file starts with: the app's, never the analysis's.
-  defp initial_metadata(opts) do
-    with {:ok, metadata} <- Storehouse.Metadata.normalize(Keyword.get(opts, :metadata, %{})) do
-      if Map.has_key?(metadata, "analyzed"),
-        do: {:error, {:invalid_metadata, ["analyzed"]}},
-        else: {:ok, metadata}
-    end
-  end
+  # The metadata a new file starts with.
+  defp initial_metadata(opts),
+    do: Storehouse.Metadata.normalize(Keyword.get(opts, :metadata, %{}))
 
   defp accepted(_type, nil), do: :ok
 
@@ -645,7 +640,7 @@ defmodule Storehouse do
 
   @doc """
   Runs the analysis steps of a file at once (`Storehouse.Analyzer`), each
-  one's result kept in its metadata under `"analyzed"`: `{:ok, file}`.
+  one's analysis kept in the file's `:analysis`: `{:ok, file}`.
   A step that fails keeps why, and leaves the others' results;
   `{:error, reason}` is for a file that could not be read for them.
 
