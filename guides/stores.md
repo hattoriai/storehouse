@@ -397,29 +397,97 @@ read. A stream reads each chunk as it is taken, and raises
 `Storehouse.ReadError` when the store fails halfway; `download/3` gives
 that error as `{:error, reason}`, and leaves nothing at the path.
 
-## A zip of files
+## Archives: a zip of files
 
-An export of an account's files, a folder to download: `Storehouse.Zip`
-makes a zip of stored files and the app's own as a stream, with nothing
-on the disk and no more than a chunk in memory, past 4 GB too (ZIP64).
+An export of an account's files, a folder to download, a backup:
+`Storehouse.Archive` makes an archive of stored files and the app's own
+as a stream, with nothing on the disk and no more than a chunk in memory,
+past 4 GB too.
 
 ```elixir
 entries = [
-  {"README.txt", "Your photographs, as of 23 October 2026.\n"}
+  {"README.txt", "Your photographs, as of 23 October 2026.\n"},
+  {"stories.json", {:call, {MyApp.Exports, :stories_json, [account.id]}}}
   | for(photo <- photos, do: {"photos/" <> photo.name, {:stored, photo.key}})
 ]
 
 # Its size before it is made: "3.2 GB, 1,204 photographs".
-{:ok, bytes} = Storehouse.Zip.size(entries)
-
-# Into the store as it is made (S3's multipart upload), then a link to it.
-{:ok, zip} = Storehouse.Zip.store(entries, "exports/42/2026-10-23.zip")
-{:ok, url} = Storehouse.signed_url(zip, expires_in: 86_400, disposition: :attachment)
+{:ok, bytes} = Storehouse.Archive.size(entries)
 ```
 
-`Storehouse.Zip.stream/2` gives the same zip as a stream, for a response
-sent in chunks. A name is a path in the zip, never outside it: `..`, a
-leading `/` and a backslash are refused.
+Making it takes as long as reading its files and writing it back, a
+minute or two for a few GB: not a request's time. `store_later/3` makes it
+in a job of the app's runner (Oban's, kept through deploys), then calls
+your function with it, to send its link:
+
+```elixir
+Storehouse.Archive.store_later(entries, "exports/42.zip",
+  expires_in: 86_400,
+  then: {MyApp.Exports, :ready, [account.id]}
+)
+
+# lib/my_app/exports.ex
+def ready({:ok, zip}, account_id) do
+  {:ok, url} = Storehouse.signed_url(zip, expires_in: 86_400, disposition: :attachment)
+  MyApp.Mailer.deliver_export(account_id, url)
+end
+```
+
+`store/3` does the same at once, and `stream/2` gives the archive as a
+stream, for a response sent in chunks.
+
+What it can be:
+
+* **Compressed** where it shrinks: text, CSV and JSON are deflated,
+  photographs and video, compressed already, stored as they are
+  (`compression: :auto`, the default; `:compress` or `:none` for all).
+  Compression loses nothing: unzipped, a file is the same bytes.
+* **Encrypted** with a password, AES-256: `password: "…"` (in a job, a
+  function that gives it, `{:call, {m, f, a}}`: a job never keeps one).
+  7-Zip, WinZip and Keka open it; macOS's Archive Utility does not.
+* **Split** in archives of at most a size, each whole, `max_bytes:
+  2_000_000_000`: `exports/42-1.zip`, `exports/42-2.zip`.
+* **A tar**, gzipped or not, `format: :tar`, or a format of yours
+  (`Storehouse.Archive.Format`), for all of them with
+  `config :storehouse, archive_format: :tar`.
+
+A name is a path in the archive, never outside it: `..`, a leading `/`
+and a backslash are refused.
+
+## Files that expire
+
+An export whose link is emailed for a day, a PDF to download for a
+week, a report a job made: `expires_in:` stores a file that is deleted
+after its time.
+
+```elixir
+{:ok, file} = Storehouse.store(path, expires_in: 7 * 86_400, owner: account.id)
+
+Storehouse.expires_at(file)
+#=> ~U[2026-10-30 12:00:00Z]
+
+# Its link never outlives it; once it expired, there is none.
+{:ok, url} = Storehouse.signed_url(file, expires_in: 30 * 86_400)
+```
+
+Its key is under `"expiring/"`, then the days it is kept, then when it
+expires (`Storehouse.expiring_key/2`): `"expiring/7d/1792843200/42/…"`.
+On S3, give the bucket one lifecycle rule for each number of days you
+use, on its prefix:
+
+```json
+{"Rules": [
+  {"ID": "storehouse-expiring-1d", "Status": "Enabled", "Filter": {"Prefix": "expiring/1d/"}, "Expiration": {"Days": 1}},
+  {"ID": "storehouse-expiring-7d", "Status": "Enabled", "Filter": {"Prefix": "expiring/7d/"}, "Expiration": {"Days": 7}}
+]}
+```
+
+On the local disk, and a store with no lifecycle rules, `Storehouse.Sweeper`
+deletes them once their time has come.
+
+An archive takes `expires_in:` too (`Storehouse.Archive.store/3`), and
+anything else made in the store an expiring key:
+`Storehouse.expiring_key("exports/42.csv", 86_400)`.
 
 ## Files from an address
 

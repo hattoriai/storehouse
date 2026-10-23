@@ -91,6 +91,9 @@ It gives your app:
 * **the same file again** is the one you have: found by its checksum
   before it is uploaded (and the upload signed with it, so the store
   takes only those bytes), or when it is verified, for two at once;
+* **files that expire**: an export, a report, a PDF to download for a
+  week, deleted after its time by a bucket's lifecycle rule or the
+  sweeper, its signed links never outliving it;
 * **cleanup**: files listed and deleted by prefix (an account's, a
   thousand at a time on S3), deletions tried again until the store
   answers, and temporary files of forms never saved swept
@@ -102,9 +105,11 @@ It gives your app:
 * **files read back**: a file's size and type without reading it, its
   bytes all at once, as a stream a chunk at a time, or to a path, each
   refused past a size limit before a byte is read;
-* **zips of stored files**, made as a stream into the store or a
-  response, with nothing on the disk, past 4 GB (ZIP64), their size
-  known before they are made: an account's export;
+* **archives of stored files**, an account's export: zips (compressed
+  where it helps, encrypted with AES-256, past 4 GB) or tars, made as a
+  stream into the store or a response, out of the request on your runner,
+  split in parts of a size, with nothing on the disk, their size known
+  before they are made;
 * **work after the upload**: steps of your own (an image's EXIF, a PDF's
   pages) run on a stored file, at once or out of the request, their
   results kept with it and saved in its record's column; and run again

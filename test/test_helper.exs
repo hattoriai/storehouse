@@ -9,6 +9,8 @@ exclude =
     s3: !System.get_env("S3_ENDPOINT"),
     ecto: !System.get_env("DATABASE_URL"),
     node: !System.find_executable("node"),
+    # An encrypted zip opened by 7-Zip, where it is installed.
+    sevenzip: !System.find_executable("7z"),
     # A zip past 4 GB, on the disk: STOREHOUSE_LARGE=1.
     large: !System.get_env("STOREHOUSE_LARGE")
   ]

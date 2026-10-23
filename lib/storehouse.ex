@@ -126,6 +126,11 @@ defmodule Storehouse do
     * `:cache` - `true` stores the file under the temporary prefix
       (`cache_prefix/0`), until `promote/2` makes it permanent: an upload
       of a form that may never be saved.
+    * `:expires_in` - seconds after which the file is deleted: an export,
+      a report, a PDF to download for a week. Its key is an expiring one
+      (`expiring_key/2`): a bucket's lifecycle rule deletes it, or
+      `Storehouse.Sweeper` does, and `signed_url/2` never signs it past
+      then. Not with `:cache`.
     * `:preview` - a function of the stored file and `path` that gives
       the URL of a smaller image of it (a thumbnail, a PDF's first page, a
       video's poster), or `nil`. It runs while `path` is still there; the
@@ -207,14 +212,23 @@ defmodule Storehouse do
     do: if(type in accept, do: :ok, else: {:error, :not_accepted})
 
   @doc false
-  def new_key_for(opts, name, content_type), do: new_key(opts, name, content_type)
+  # For an upload straight to the store, whose `:expires_in` is its URL's.
+  def new_key_for(opts, name, content_type),
+    do: new_key(Keyword.delete(opts, :expires_in), name, content_type)
 
   # The key of a new file: the `:key` function's, or `key/2`'s; under the
   # temporary prefix with `cache: true`.
   defp new_key(opts, name, content_type) do
+    if opts[:cache] && opts[:expires_in],
+      do: raise(ArgumentError, "a file is temporary (:cache) or expiring (:expires_in), not both")
+
     with key when is_binary(key) <- Keyword.get(opts, :key, &key/2).(name, content_type),
          {:ok, key} <- under_owner(key, opts[:owner]) do
-      {:ok, if(opts[:cache], do: cache_prefix() <> key, else: key)}
+      cond do
+        opts[:cache] -> {:ok, cache_prefix() <> key}
+        expires_in = opts[:expires_in] -> {:ok, expiring_key(key, expires_in)}
+        true -> {:ok, key}
+      end
     else
       {:error, _reason} = error -> error
       other -> {:error, {:invalid_key, other}}
@@ -280,7 +294,10 @@ defmodule Storehouse do
   def owns?(owner, key) when is_binary(key) do
     with {:ok, prefix} <- owner_prefix(owner),
          true <- valid_key?(key) do
-      key |> String.replace_prefix(cache_prefix(), "") |> String.starts_with?(prefix <> "/")
+      key
+      |> String.replace_prefix(cache_prefix(), "")
+      |> unexpiring()
+      |> String.starts_with?(prefix <> "/")
     else
       _not -> false
     end
@@ -365,6 +382,74 @@ defmodule Storehouse do
   """
   @spec cache_prefix() :: String.t()
   def cache_prefix, do: Application.get_env(:storehouse, :cache_prefix, "cache/")
+
+  @doc """
+  The prefix of the keys of expiring files (`:expires_in`): `"expiring/"`,
+  or `config :storehouse, expiring_prefix: "expires/"`.
+  """
+  @spec expiring_prefix() :: String.t()
+  def expiring_prefix, do: Application.get_env(:storehouse, :expiring_prefix, "expiring/")
+
+  @doc """
+  The key of a file that expires in `expires_in` seconds: under
+  `expiring_prefix/0`, then the days it is kept (rounded up, for a
+  bucket's lifecycle rule of that many days), then when it expires, in
+  Unix seconds, then `key`.
+
+      iex> Storehouse.expiring_key("exports/42.zip", 86_400, ~U[2026-10-23 12:00:00Z])
+      "expiring/1d/1792843200/exports/42.zip"
+
+  A bucket needs one lifecycle rule a day count it is given, on its
+  prefix: `"expiring/1d/"` expires after 1 day, `"expiring/7d/"` after 7.
+  See "Files that expire" in the Stores guide.
+  """
+  @spec expiring_key(Storehouse.Adapter.key(), pos_integer(), DateTime.t()) ::
+          Storehouse.Adapter.key()
+  def expiring_key(key, expires_in, now \\ DateTime.utc_now())
+      when is_binary(key) and is_integer(expires_in) and expires_in > 0 do
+    days = div(expires_in + 86_399, 86_400)
+    at = DateTime.to_unix(now) + expires_in
+    "#{expiring_prefix()}#{days}d/#{at}/" <> key
+  end
+
+  @doc """
+  When a file (or a key) expires (`expiring_key/2`), or `nil` for one that
+  does not.
+
+      iex> Storehouse.expires_at("expiring/1d/1792843200/exports/42.zip")
+      ~U[2026-10-24 12:00:00Z]
+
+      iex> Storehouse.expires_at("exports/42.zip")
+      nil
+
+  """
+  @spec expires_at(Storehouse.File.t() | Storehouse.Adapter.key()) :: DateTime.t() | nil
+  def expires_at(%Storehouse.File{key: key}), do: expires_at(key)
+
+  def expires_at(key) when is_binary(key) do
+    prefix = expiring_prefix()
+
+    with ^prefix <> rest <- key,
+         [days, at, _key] <- String.split(rest, "/", parts: 3),
+         {_days, "d"} <- Integer.parse(days),
+         {at, ""} <- Integer.parse(at) do
+      DateTime.from_unix!(at)
+    else
+      _not_expiring -> nil
+    end
+  end
+
+  # The key without its expiring prefix, days and time.
+  defp unexpiring(key) do
+    if expires_at(key) do
+      [_days, _at, rest] =
+        key |> String.replace_prefix(expiring_prefix(), "") |> String.split("/", parts: 3)
+
+      rest
+    else
+      key
+    end
+  end
 
   @doc "Whether a file (or a key) is a temporary one, under `cache_prefix/0`."
   @spec cached?(Storehouse.File.t() | Storehouse.Adapter.key()) :: boolean()
@@ -524,7 +609,7 @@ defmodule Storehouse do
              do: {:error, :too_large},
              else: :ok
            ),
-         {:ok, key} <- new_key(opts, name, type),
+         {:ok, key} <- new_key_for(opts, name, type),
          meta = %{name: name, content_type: type, bytes: bytes, checksum: checksum},
          {:ok, upload} <-
            adapter.presign_upload(key, meta, expires_in: Keyword.get(opts, :expires_in, 600)) do
@@ -656,7 +741,9 @@ defmodule Storehouse do
 
   ## Options
 
-    * `:expires_in` - in seconds. The default is 300.
+    * `:expires_in` - in seconds. The default is 300. An expiring file's
+      URL (`expiring_key/2`) expires with it, at the latest; one expired
+      already gives `{:error, :expired}`.
     * `:disposition` - `"inline"` or `"attachment"` (a download).
     * `:filename` - the name of the download.
     * `:adapter` - as for `store/2`. The adapter must sign URLs
@@ -672,14 +759,27 @@ defmodule Storehouse do
     adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
 
     with :ok <- supported(adapter, :signed_url, 2),
-         true <- valid_key?(key) || {:error, :invalid_key} do
+         true <- valid_key?(key) || {:error, :invalid_key},
+         {:ok, expires_in} <- signed_for(key, Keyword.get(opts, :expires_in, 300)) do
       adapter.signed_url(
         key,
         Keyword.merge(
-          [expires_in: 300],
-          Keyword.take(opts, [:expires_in, :disposition, :filename])
+          Keyword.take(opts, [:disposition, :filename]),
+          expires_in: expires_in
         )
       )
+    end
+  end
+
+  # An expiring file's URL never outlives it.
+  defp signed_for(key, expires_in) do
+    case expires_at(key) do
+      nil ->
+        {:ok, expires_in}
+
+      at ->
+        left = DateTime.diff(at, DateTime.utc_now())
+        if left > 0, do: {:ok, min(expires_in, left)}, else: {:error, :expired}
     end
   end
 

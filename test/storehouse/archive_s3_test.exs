@@ -1,15 +1,15 @@
-defmodule Storehouse.ZipS3Test do
-  # A zip of a bucket's files, streamed into the bucket in parts, at
+defmodule Storehouse.ArchiveS3Test do
+  # An archive of a bucket's files, streamed into the bucket in parts, at
   # S3_ENDPOINT (moto in CI).
   use ExUnit.Case, async: false
 
   @moduletag :s3
 
-  alias Storehouse.{S3, Zip}
+  alias Storehouse.{Archive, S3}
 
   setup do
     endpoint = System.fetch_env!("S3_ENDPOINT")
-    bucket = "storehouse-zip-#{System.unique_integer([:positive])}"
+    bucket = "storehouse-archive-#{System.unique_integer([:positive])}"
 
     Application.put_env(:storehouse, S3,
       bucket: bucket,
@@ -29,28 +29,28 @@ defmodule Storehouse.ZipS3Test do
   end
 
   @tag :tmp_dir
-  test "two thousand files, zipped into the bucket in parts, each as it was", %{tmp_dir: dir} do
+  test "two thousand files, archived into the bucket in parts, each as it was", %{tmp_dir: dir} do
     entries =
       1..2_000
       |> Task.async_stream(
         fn i ->
-          path = Path.join(dir, "#{i}.txt")
-          File.write!(path, :binary.copy("#{i} ", 2_000))
-          {:ok, _url} = S3.put("photos/#{i}.txt", path, %{content_type: "text/plain"})
-          {"photos/#{i}.txt", {:stored, "photos/#{i}.txt"}}
+          path = Path.join(dir, "#{i}.jpg")
+          File.write!(path, :crypto.strong_rand_bytes(10_000))
+          {:ok, _url} = S3.put("photos/#{i}.jpg", path, %{content_type: "image/jpeg"})
+          {"photos/#{i}.jpg", {:stored, "photos/#{i}.jpg"}}
         end,
         max_concurrency: 16
       )
       |> Enum.map(fn {:ok, entry} -> entry end)
 
-    {:ok, size} = Zip.size(entries, adapter: S3)
-    assert {:ok, file} = Zip.store(entries, "exports/all.zip", adapter: S3)
+    {:ok, size} = Archive.size(entries, adapter: S3)
+    assert {:ok, file} = Archive.store(entries, "exports/all.zip", adapter: S3)
     assert file.bytes == size
     assert size > 16 * 1_048_576
 
     {:ok, zip} = Storehouse.read(file.key, adapter: S3)
     {:ok, files} = :zip.unzip(zip, [:memory])
     assert length(files) == 2_000
-    assert {~c"photos/1999.txt", :binary.copy("1999 ", 2_000)} in files
+    assert {~c"photos/1999.jpg", File.read!(Path.join(dir, "1999.jpg"))} in files
   end
 end

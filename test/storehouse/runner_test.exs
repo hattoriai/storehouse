@@ -193,6 +193,37 @@ defmodule Storehouse.RunnerTest do
       end)
     end
 
+    def archived(result, test), do: send(test, {:archived, result})
+
+    test "an archive made in an Oban job, then the app's function with it" do
+      start_supervised!({Oban, name: StorehouseTest.Oban, repo: Repo, testing: :manual})
+
+      {:ok, _url} =
+        PrivateFiles.put("m/a.png", Path.expand("../fixtures/small.png", __DIR__), %{})
+
+      runner = {Storehouse.Runner.Oban, name: StorehouseTest.Oban}
+
+      capture_log(fn ->
+        assert :ok =
+                 Storehouse.Archive.store_later(
+                   [{"a.png", {:stored, "m/a.png"}}],
+                   "exports/a.zip",
+                   adapter: PrivateFiles,
+                   runner: runner,
+                   then: {__MODULE__, :archived, [self()]}
+                 )
+      end)
+
+      assert [%{args: args}] = jobs()
+      assert :ok = Oban.Testing.perform_job(Worker, args, [])
+      assert_received {:archived, {:ok, %Storehouse.File{key: "exports/a.zip"} = file}}
+      assert {:ok, _head} = Storehouse.head(file.key, adapter: PrivateFiles)
+
+      # Made again, it takes its place.
+      assert :ok = Oban.Testing.perform_job(Worker, args, [])
+      assert_received {:archived, {:ok, _file}}
+    end
+
     test "the default runner when an instance named Oban runs" do
       start_supervised!({Oban, name: Oban, repo: Repo, testing: :manual})
       assert Runner.resolve(nil) == {Storehouse.Runner.Oban, []}
