@@ -131,6 +131,8 @@ defmodule Storehouse do
       (`expiring_key/2`): a bucket's lifecycle rule deletes it, or
       `Storehouse.Sweeper` does, and `signed_url/2` never signs it past
       then. Not with `:cache`.
+    * `:cache_control` - the `Cache-Control` the store serves the file
+      with, in place of its own (`Storehouse.S3`'s `:cache_control`).
     * `:preview` - a function of the stored file and `path` that gives
       the URL of a smaller image of it (a thumbnail, a PDF's first page, a
       video's poster), or `nil`. It runs while `path` is still there; the
@@ -163,12 +165,16 @@ defmodule Storehouse do
          checksum = checksum(path),
          :new <- known(opts, checksum),
          {:ok, key} <- new_key(opts, name, description.content_type),
-         meta = %{
-           name: name,
-           content_type: description.content_type,
-           bytes: description.bytes,
-           checksum: checksum
-         },
+         meta =
+           cache_control(
+             %{
+               name: name,
+               content_type: description.content_type,
+               bytes: description.bytes,
+               checksum: checksum
+             },
+             opts
+           ),
          {:ok, url} <- put(adapter, key, path, meta) do
       file = %Storehouse.File{
         key: key,
@@ -183,6 +189,14 @@ defmodule Storehouse do
       }
 
       {:ok, preview(file, path, Keyword.get(opts, :preview))}
+    end
+  end
+
+  # The `Cache-Control` the store keeps with the file, when one is asked.
+  defp cache_control(meta, opts) do
+    case opts[:cache_control] do
+      nil -> meta
+      value when is_binary(value) -> Map.put(meta, :cache_control, value)
     end
   end
 
@@ -581,6 +595,8 @@ defmodule Storehouse do
       those bytes. An invalid one gives `{:error, :invalid_checksum}`.
     * `:existing` - as for `store/2`, with `:checksum`: a file the app
       has already gives `{:existing, file}`, and nothing is uploaded.
+    * `:cache_control` - as for `store/2`: signed, so the browser sends
+      it, and the store keeps it.
     * `:adapter` and `:key`, as for `store/2`. The adapter must sign
       uploads (`c:Storehouse.Adapter.presign_upload/3`): `Storehouse.Local`
       and `Storehouse.S3` do; another gives `{:error, :not_supported}`.
@@ -610,7 +626,11 @@ defmodule Storehouse do
              else: :ok
            ),
          {:ok, key} <- new_key_for(opts, name, type),
-         meta = %{name: name, content_type: type, bytes: bytes, checksum: checksum},
+         meta =
+           cache_control(
+             %{name: name, content_type: type, bytes: bytes, checksum: checksum},
+             opts
+           ),
          {:ok, upload} <-
            adapter.presign_upload(key, meta, expires_in: Keyword.get(opts, :expires_in, 600)) do
       {:ok, Map.put(upload, :key, key)}
@@ -1208,6 +1228,7 @@ defmodule Storehouse do
 
     with :ok <- span(:delete, %{key: key, adapter: adapter}, fn -> adapter.delete(key) end) do
       Storehouse.Variants.delete(key, adapter: adapter)
+      Storehouse.Purge.deleted(key, Keyword.put(opts, :adapter, adapter))
       Storehouse.Notify.notify(:deleted, %{key: key}, opts)
     end
   end
@@ -1326,6 +1347,7 @@ defmodule Storehouse do
 
     with {:ok, count} <- result do
       Storehouse.Variants.delete(prefix, adapter: adapter)
+      Storehouse.Purge.deleted_prefix(prefix, Keyword.put(opts, :adapter, adapter))
 
       Storehouse.Notify.notify(:deleted, %{prefix: prefix, count: count}, opts)
       {:ok, count}

@@ -22,6 +22,11 @@ defmodule Storehouse.Local.Plug do
     * `:at` - the request path of the files. The default is the store's
       `:url_prefix`.
     * `:root` - the directory. The default is the configured `:root`.
+    * `:cache_control` - the whole `Cache-Control` header, in place of
+      `private, max-age=…`: `"public, max-age=31536000, immutable"` for a
+      CDN in front.
+    * `:cache_tag` - `true` sends each file's `Cache-Tag`
+      (`Storehouse.Purge.cache_tag/1`), for a purge by tag.
     * `:max_age` - the `max-age` of the `Cache-Control` header, in seconds.
       The default is `3600`.
     * `:private` - when `true`, a file is served only at a URL the store
@@ -67,10 +72,20 @@ defmodule Storehouse.Local.Plug do
   import Plug.Conn
 
   alias Storehouse.{Check, Local}
+  alias Storehouse.Plug.Ranges
 
   @impl Plug
   def init(opts),
-    do: Keyword.validate!(opts, [:at, :root, store: Local, max_age: 3600, private: false])
+    do:
+      Keyword.validate!(opts, [
+        :at,
+        :root,
+        :cache_control,
+        store: Local,
+        max_age: 3600,
+        private: false,
+        cache_tag: false
+      ])
 
   @impl Plug
   def call(%Plug.Conn{method: method} = conn, opts) when method in ["GET", "HEAD", "PUT"] do
@@ -101,7 +116,13 @@ defmodule Storehouse.Local.Plug do
          root =
            opts |> Keyword.get_lazy(:root, fn -> Local.root(opts[:config]) end) |> Path.expand(),
          {:ok, path, size} <- regular_file(root, segments) || 404 do
-      send_regular_file(conn, path, size, disposition, opts)
+      send_regular_file(
+        conn,
+        path,
+        size,
+        disposition,
+        Keyword.put(opts, :key, Path.join(segments))
+      )
     else
       status when is_integer(status) -> halt_with(conn, status)
     end
@@ -239,7 +260,11 @@ defmodule Storehouse.Local.Plug do
 
     conn
     |> put_resp_content_type(type, nil)
-    |> put_resp_header("cache-control", "private, max-age=#{opts[:max_age]}")
+    |> put_resp_header(
+      "cache-control",
+      opts[:cache_control] || "private, max-age=#{opts[:max_age]}"
+    )
+    |> Storehouse.Purge.put_cache_tag(opts[:cache_tag], opts[:key])
     |> put_resp_header("x-content-type-options", "nosniff")
     |> put_resp_header("content-security-policy", "default-src 'none'; sandbox")
     |> put_resp_header("content-disposition", disposition(type, disposition))
@@ -251,7 +276,7 @@ defmodule Storehouse.Local.Plug do
   defp send_body(%Plug.Conn{method: "HEAD"} = conn, _path, _size), do: send_resp(conn, 200, "")
 
   defp send_body(conn, path, size) do
-    case range(get_req_header(conn, "range"), size) do
+    case Ranges.range(get_req_header(conn, "range"), size) do
       {first, last} ->
         conn
         |> put_resp_header("content-range", "bytes #{first}-#{last}/#{size}")
@@ -264,34 +289,6 @@ defmodule Storehouse.Local.Plug do
 
       :all ->
         send_file(conn, 200, path)
-    end
-  end
-
-  # One `bytes` range: `first-last`, `first-` or `-suffix`. Anything else
-  # (several ranges, another unit, a header that is not valid) is the whole
-  # file, as RFC 9110 allows.
-  defp range([header], size) do
-    case Regex.run(~r/\Abytes=(\d*)-(\d*)\z/, String.trim(header), capture: :all_but_first) do
-      ["", ""] -> :all
-      ["", suffix] -> suffix_range(String.to_integer(suffix), size)
-      [first, last] -> first_range(String.to_integer(first), last, size)
-      nil -> :all
-    end
-  end
-
-  defp range(_headers, _size), do: :all
-
-  defp suffix_range(0, _size), do: :unsatisfiable
-  defp suffix_range(_suffix, 0), do: :unsatisfiable
-  defp suffix_range(suffix, size), do: {max(size - suffix, 0), size - 1}
-
-  defp first_range(first, _last, size) when first >= size, do: :unsatisfiable
-  defp first_range(first, "", size), do: {first, size - 1}
-
-  defp first_range(first, last, size) do
-    case String.to_integer(last) do
-      last when last < first -> :all
-      last -> {first, min(last, size - 1)}
     end
   end
 

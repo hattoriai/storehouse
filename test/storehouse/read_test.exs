@@ -61,8 +61,10 @@ defmodule Storehouse.ReadTest do
 
   describe "head/2" do
     test "gives the size and type of a stored file, without reading it", %{stored: file} do
-      assert Storehouse.head(file) ==
-               {:ok, %{bytes: 35_367, content_type: "image/jpeg", checksum: nil}}
+      assert {:ok, %{bytes: 35_367, content_type: "image/jpeg", checksum: nil, modified_at: at}} =
+               Storehouse.head(file)
+
+      assert DateTime.diff(DateTime.utc_now(), at) in 0..60
 
       assert Storehouse.head(file.key, adapter: Watched) == Storehouse.head(file)
       refute_received {:read_range, _first, _last}

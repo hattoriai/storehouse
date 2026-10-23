@@ -9,6 +9,17 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Added
 
+- A CDN in front: `:cache_control` on `Storehouse.S3` (and per call, on
+  `store/2` and `presign_upload/4`) keeps a `Cache-Control` with each
+  file, however it came in (stored, presigned and signed, streamed,
+  copied or promoted); `Storehouse.Local.Plug` takes `:cache_control`
+  too. `Storehouse.Purge` tells the CDN to forget a file deleted, its
+  variants and the app's routes to it, by URL, `Cache-Tag` or prefix, as
+  a job of the runner whose arguments never hold the credentials;
+  `Storehouse.Purge.Cloudflare` is one purger. `Storehouse.Proxy` streams
+  a file the app authorises through the app, with ranges, `ETag`,
+  `Last-Modified` and `304`s. A store's `head` gives `:modified_at`.
+
 - Variants: `Storehouse.variant_url/3` and `Storehouse.variant/3`, by
   presets only (`Storehouse.Variants`: widths or a ladder of them, a box
   to fit or fill, a crop's focus, formats chosen by `Accept`, quality,
@@ -193,6 +204,11 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   request, a few sent at once and each tried again on a network error or
   the store's 5xx, registered in batches; a result, progress and cancel
   for each. Types in `storehouse-client.d.mts`.
+
+### Fixed
+
+- `Storehouse.S3` sent a `PUT` without a body (a copy) as
+  `application/octet-stream`, whatever type it signed.
 
 ### Changed
 

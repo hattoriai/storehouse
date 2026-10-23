@@ -283,8 +283,15 @@ defmodule Storehouse.Local do
   @doc false
   def head(c, key) do
     with {:ok, path} <- path(c, key),
-         {:ok, %File.Stat{size: size, type: :regular}} <- File.stat(path) do
-      {:ok, %{bytes: size, content_type: Check.content_type(Path.extname(key)), checksum: nil}}
+         {:ok, %File.Stat{size: size, type: :regular, mtime: mtime}} <-
+           File.stat(path, time: :posix) do
+      {:ok,
+       %{
+         bytes: size,
+         content_type: Check.content_type(Path.extname(key)),
+         checksum: nil,
+         modified_at: DateTime.from_unix!(mtime)
+       }}
     else
       {:ok, %File.Stat{}} -> {:error, :enoent}
       error -> error

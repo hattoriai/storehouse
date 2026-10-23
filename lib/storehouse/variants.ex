@@ -201,6 +201,37 @@ defmodule Storehouse.Variants do
   defp accepts?(_accept, _format), do: true
 
   @doc false
+  # Every URL of the variants of the file with `key`: each preset's, at
+  # each of its widths, for a purge. None without presets or a renderer.
+  def all_urls(key, opts) do
+    config = config(opts)
+
+    if config.renderer && config.presets != %{} && not String.starts_with?(key, config.prefix) do
+      for {name, preset} <- config.presets,
+          width <- preset.widths,
+          do: url(key, name, Keyword.put(opts, :width, width))
+    else
+      []
+    end
+  end
+
+  @doc false
+  # The URL prefix of the variants under a key prefix, where their URLs are
+  # the plug's, for a purge by prefix. A renderer of URLs has none: its
+  # URLs do not start with the key.
+  def url_prefixes(prefix, opts) do
+    config = config(opts)
+
+    case config.renderer do
+      {renderer, _opts} when config.presets != %{} ->
+        if exports?(renderer, :url, 3), do: [], else: ["#{config.url}/#{prefix}"]
+
+      _none ->
+        []
+    end
+  end
+
+  @doc false
   # Whether variants are stored: a preset, and a renderer that renders.
   def stored?(opts \\ []), do: stored(config(opts))
 
@@ -221,7 +252,8 @@ defmodule Storehouse.Variants do
     variant? = String.starts_with?(key, config.prefix)
 
     if not variant? and stored(config) and Storehouse.supports?(adapter, :list, 1) do
-      case Storehouse.delete_prefix(under(config.prefix, key), adapter: adapter) do
+      # Their URLs are purged with their original's (Storehouse.Purge).
+      case Storehouse.delete_prefix(under(config.prefix, key), adapter: adapter, purge: false) do
         {:ok, _count} ->
           :ok
 

@@ -131,7 +131,12 @@ defmodule Storehouse.S3Test do
     {:ok, file} = Storehouse.store(Path.join(@fixtures, "harbour.jpg"), adapter: S3)
 
     assert {:ok, head} = Storehouse.head(file, adapter: S3)
-    assert head == %{bytes: 35_367, content_type: "image/jpeg", checksum: file.checksum}
+
+    assert %{bytes: 35_367, content_type: "image/jpeg", checksum: checksum, modified_at: at} =
+             head
+
+    assert checksum == file.checksum
+    assert DateTime.diff(DateTime.utc_now(), at) in -60..60
 
     assert Storehouse.read(file, adapter: S3) == {:ok, harbour}
     assert Storehouse.read(file, adapter: S3, max_bytes: 100) == {:error, {:too_large, 35_367}}

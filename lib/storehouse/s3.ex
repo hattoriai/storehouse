@@ -38,6 +38,12 @@ defmodule Storehouse.S3 do
     * `:public_url` - the base URL of the files for `url/1`: a CDN, a
       custom domain. The default is the bucket's URL. A bucket that is not
       public serves its files at signed URLs (`Storehouse.signed_url/2`).
+    * `:cache_control` - the `Cache-Control` the bucket serves each file
+      with, kept with it when it is stored, uploaded from the browser,
+      streamed in or copied in: for a CDN in front. Keys are never reused,
+      so a file never changes: `"public, max-age=31536000, immutable"`.
+      The default is none, the bucket's own. A call's `:cache_control`
+      takes its place (`Storehouse.store/2`).
 
   Each file is stored with its checked content type, and with
   `Content-Disposition: attachment` for every type a browser should not
@@ -58,6 +64,7 @@ defmodule Storehouse.S3 do
   An upload presigned with its checksum (`:checksum`) is signed with
   `x-amz-checksum-sha256` too, and the bucket refuses bytes that do not
   have it: add it and `x-amz-sdk-checksum-algorithm` to `AllowedHeaders`.
+  A store with a `:cache_control` signs it too: add `cache-control`.
   """
 
   @behaviour Storehouse.Adapter
@@ -145,6 +152,7 @@ defmodule Storehouse.S3 do
           {"content-disposition", disposition(type)},
           {"content-length", Integer.to_string(size)}
         ] ++
+          cache_header(c, meta) ++
           if(meta[:checksum],
             do: [
               {"x-amz-sdk-checksum-algorithm", "SHA256"},
@@ -195,10 +203,9 @@ defmodule Storehouse.S3 do
       type = Map.fetch!(meta, :content_type)
 
       headers =
-        Map.merge(
-          %{"content-type" => type, "content-disposition" => disposition(type)},
-          checksum_headers(meta[:checksum])
-        )
+        %{"content-type" => type, "content-disposition" => disposition(type)}
+        |> Map.merge(checksum_headers(meta[:checksum]))
+        |> Map.merge(Map.new(cache_header(c, meta)))
 
       # The size is signed too: the bucket takes the file of that size only.
       signed =
@@ -209,6 +216,14 @@ defmodule Storehouse.S3 do
         )
 
       {:ok, %{method: "PUT", url: URI.to_string(signed), headers: headers}}
+    end
+  end
+
+  # The Cache-Control the file is served with: the call's, else the store's.
+  defp cache_header(c, meta) do
+    case meta[:cache_control] || c[:cache_control] do
+      nil -> []
+      value -> [{"cache-control", value}]
     end
   end
 
@@ -283,7 +298,8 @@ defmodule Storehouse.S3 do
            %{
              bytes: headers |> header("content-length", "0") |> String.to_integer(),
              content_type: header(headers, "content-type", nil),
-             checksum: header(headers, "x-amz-checksum-sha256", nil)
+             checksum: header(headers, "x-amz-checksum-sha256", nil),
+             modified_at: headers |> header("last-modified", nil) |> http_date()
            }}
 
         {:ok, 404, _headers, _body} ->
@@ -382,6 +398,19 @@ defmodule Storehouse.S3 do
     end
   end
 
+  # An HTTP date (`Wed, 21 Oct 2026 07:28:00 GMT`), as a DateTime, or nil.
+  defp http_date(nil), do: nil
+
+  defp http_date(text) do
+    case :httpd_util.convert_request_date(String.to_charlist(text)) do
+      {{_, _, _}, {_, _, _}} = erl ->
+        erl |> NaiveDateTime.from_erl!() |> DateTime.from_naive!("Etc/UTC")
+
+      _bad_date ->
+        nil
+    end
+  end
+
   defp modified_at(text) do
     case DateTime.from_iso8601(text) do
       {:ok, at, _offset} -> at
@@ -466,6 +495,7 @@ defmodule Storehouse.S3 do
          key: key,
          uri: uri,
          type: type,
+         cache: cache_header(c, meta),
          part_size: part_size,
          buffer: [],
          size: 0,
@@ -491,6 +521,7 @@ defmodule Storehouse.S3 do
 
     headers =
       object_headers(stream.type) ++
+        stream.cache ++
         [
           {"x-amz-sdk-checksum-algorithm", "SHA256"},
           {"x-amz-checksum-sha256", Base.encode64(Signature.sha256(body))}
@@ -550,7 +581,9 @@ defmodule Storehouse.S3 do
 
   defp start_multipart(%{upload_id: nil} = stream) do
     c = stream.config
-    headers = object_headers(stream.type) ++ [{"x-amz-checksum-algorithm", "SHA256"}]
+
+    headers =
+      object_headers(stream.type) ++ stream.cache ++ [{"x-amz-checksum-algorithm", "SHA256"}]
 
     case request(c, :post, query(stream.uri, %{"uploads" => ""}), headers, nil) do
       {:ok, 200, _headers, body} ->
@@ -644,21 +677,40 @@ defmodule Storehouse.S3 do
           Enum.map_join(String.split(from, "/"), "/", &Signature.encode/1)
 
       # A copy can fail after its 200: the error is then in the body.
-      case request(c, :put, uri, [{"x-amz-copy-source", source}], nil) do
-        {:ok, 200, _headers, body} ->
-          error_in_body(body)
-
-        {:ok, 404, _headers, _body} ->
-          {:error, :enoent}
-
-        {:ok, status, _headers, body} ->
-          {:error, {:s3, status, body}}
-
-        {:error, reason} ->
-          {:error, reason}
+      with {:ok, headers} <- copy_headers(from_c, from, c, source) do
+        copied(request(c, :put, uri, headers, nil))
       end
     end
   end
+
+  # The copy keeps the original's headers, unless the store it goes to
+  # serves its files with a Cache-Control of its own: then they are
+  # written again, with it.
+  defp copy_headers(from_c, from, c, source) do
+    case c[:cache_control] do
+      nil ->
+        {:ok, [{"x-amz-copy-source", source}]}
+
+      cache_control ->
+        with {:ok, %{content_type: type}} <- head(from_c, from) do
+          type = type || "application/octet-stream"
+
+          {:ok,
+           [
+             {"x-amz-copy-source", source},
+             {"x-amz-metadata-directive", "REPLACE"},
+             {"x-amz-checksum-algorithm", "SHA256"},
+             {"cache-control", cache_control}
+             | object_headers(type)
+           ]}
+        end
+    end
+  end
+
+  defp copied({:ok, 200, _headers, body}), do: error_in_body(body)
+  defp copied({:ok, 404, _headers, _body}), do: {:error, :enoent}
+  defp copied({:ok, status, _headers, body}), do: {:error, {:s3, status, body}}
+  defp copied({:error, reason}), do: {:error, reason}
 
   @doc false
   # Whether a copy from one store's bucket to another's can be made in S3:
@@ -785,7 +837,7 @@ defmodule Storehouse.S3 do
     request =
       case body do
         nil when method in [:put, :post] ->
-          {url, request_headers, ~c"application/octet-stream", ""}
+          {url, request_headers, String.to_charlist(type), ""}
 
         nil ->
           {url, request_headers}

@@ -69,8 +69,14 @@ It gives your app:
   rule deletes those of forms never saved; files replaced or removed are
   deleted once the database has the change;
 * **private files**: signed URLs that expire, from S3 or the local plug,
-  and `Storehouse.Redirect`, a lasting URL of your app that checks the
-  person and redirects to a fresh one;
+  `Storehouse.Redirect`, a lasting URL of your app that checks the
+  person and redirects to a fresh one, and `Storehouse.Proxy`, which
+  checks them and streams the file through the app, with ranges and
+  `304`s, the bucket's address never shown;
+* **a CDN in front**: each file stored with a year's `Cache-Control`,
+  however it came in, and forgotten by the CDN when it is deleted, its
+  variants with it, by URL, tag or prefix (`Storehouse.Purge`, Cloudflare
+  built in);
 * **serving that is safe**: `Storehouse.Local.Plug` sends the checked
   type, `nosniff`, a sandboxing CSP, downloads for every type a browser
   should not show, and byte ranges, for video;
@@ -258,6 +264,8 @@ another library is welcome as an issue.
 |---|---|---|---|---|---|
 | A file's type from its bytes, a safe key | Yes | From its extension | No | Partly | Partly |
 | Serving with safe headers (`nosniff`, a sandboxing CSP, ranges) | Yes | — | — | — | — |
+| A CDN in front: cache headers on stored files, purged when deleted | Yes: per store or file, purged by URL, tag or prefix (Cloudflare built in) | No | No | Partly (a proxy mode) | No |
+| Private files streamed through the app | Yes, with ranges and `304`s | No | No | Yes | No |
 | Uploads straight to the store | Yes, checked by their first bytes | No | No | Yes | Presigned only |
 | Uploads streamed through the app, no temporary file | Yes | No | No | No | No |
 | Temporary until saved, then permanent | Yes | No | By hand | Partly | No |
@@ -286,8 +294,6 @@ another library is welcome as an issue.
   by comparing the app's records with the store.
 * **Resumable uploads** that survive a reconnect (and the tus protocol),
   and multipart uploads straight from the browser, for very large files.
-* **Proxy mode**: streaming private bucket files through the app, for a
-  CDN in front.
 * **Azure and native Google Cloud Storage**: Google Cloud Storage works
   through its S3-compatible API today.
 
