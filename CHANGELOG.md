@@ -9,11 +9,31 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Added
 
+- Responsive images: `Storehouse.Responsive.resolve/3`, a photograph's
+  `src`, `srcset`, `sizes`, size, placeholder, colour and hashes from a
+  preset's ladder (never wider than the original, each width at its
+  step), as JSON or as `Storehouse.Components.img/1`; `urls/3`, `warm/3`
+  and `warm_later/3`, which make its sizes before the first visitor asks
+  (in the app, or over HTTP through imgproxy and a CDN), on the app's
+  runner, off unless configured; and `Storehouse.Analyzer.Warm`.
+- Variants: `Storehouse.variant_url/3` and `Storehouse.variant/3`, by
+  presets only (`Storehouse.Variants`: widths or a ladder of them, a box
+  to fit or fill, a crop's focus, formats chosen by `Accept`, quality,
+  colour profile, metadata), at URLs that change only when their preset
+  does. A renderer (`Storehouse.Renderer`) makes them in the app
+  (`Storehouse.Renderer.Vix`, libvips: never enlarged, turned per EXIF,
+  without metadata), once across a cluster's nodes, stored under
+  `variants/<key>/` and served by `Storehouse.Variants.Plug` for a year;
+  or gives URLs of a service (`Storehouse.Renderer.Imgproxy`, signed), or
+  is the app's own. Deleting an original deletes its variants.
 - Placeholders: `Storehouse.Analyzer.Placeholder`, a step that makes a
   photograph's placeholder while it loads (a tiny WebP, JPEG or PNG as a
   data URI) and its average colour, with libvips through Vix (optional),
   shrinking it as it loads, turned as its EXIF says, in sRGB, with none of
-  its metadata.
+  its metadata. Or as a hash, for a frontend to decode:
+  `Storehouse.Analyzer.ThumbHash` and `Storehouse.Analyzer.BlurHash`, of
+  `Storehouse.ThumbHash` and `Storehouse.BlurHash`, encoders in plain
+  Elixir that give the reference implementations' bytes.
 - Archives: `Storehouse.Archive` makes an archive of stored files,
   binaries, the app's functions and streams as a stream (`stream/2`), into
   the store as it is made (`store/3`, S3's multipart upload), or out of

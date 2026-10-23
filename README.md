@@ -115,10 +115,19 @@ It gives your app:
   results kept with it and saved in its record's column; and run again
   over a whole table's files, a batch at a time, only where they are
   missing (`mix storehouse.reprocess`);
-* **a placeholder while a photograph loads**: a tiny WebP of it, a few
-  hundred bytes as a data URI, and its average colour, made with libvips
-  as it loads, never decoding a large original whole, with none of its
-  metadata;
+* **variants**: a photograph's thumbnail and its sizes for a `srcset`, in
+  WebP for the browsers that take it, by presets only, at URLs that never
+  change for a CDN to keep: made in the app with libvips, once however
+  many ask at the same time across a cluster, and deleted with their
+  original; or signed URLs of imgproxy, or of a renderer of your own;
+* **responsive images**: a photograph's `src`, `srcset`, size and
+  placeholder as data for a JSON API or an `<img>` for HEEx, never a size
+  larger than the original, and its sizes made before the first visitor
+  asks, on a queue of their own;
+* **a placeholder while a photograph loads**, as you prefer: a tiny WebP
+  of it, a few hundred bytes as a data URI that needs no script, a
+  ThumbHash or a BlurHash, and its average colour, made with libvips as it
+  loads, never decoding a large original whole, with none of its metadata;
 * **a photo's metadata edited without re-encoding it**, when you ask:
   where it was taken removed, only a few tags kept, an author's name
   written in, in a JPEG's, PNG's or WebP's own segments and chunks, its
@@ -238,8 +247,8 @@ user
 The guides: [Stores](guides/stores.md) (the local disk, S3, LocalStack,
 development), [Direct uploads](guides/direct_uploads.md) (and streamed
 ones), [Ecto](guides/ecto.md), [Private files](guides/private_files.md),
-[Serving](guides/serving.md), [LiveView](guides/liveview.md) and
-[After the upload](guides/analysis.md) and
+[Serving](guides/serving.md), [LiveView](guides/liveview.md),
+[After the upload](guides/analysis.md), [Variants](guides/variants.md) and
 [Uploads from any client](guides/any_client.md).
 
 ## How Storehouse compares
@@ -264,19 +273,17 @@ another library is welcome as an issue.
 | A photo's location removed, its credit written, without re-encoding | Yes, a step you add: JPEG, PNG and WebP built in, an editor of yours (ExifTool) for other types | Only by re-encoding, with ImageMagick | No | Only by re-encoding | Only by re-encoding |
 | Several stores at once | Yes: named stores, a store per field, files copied and mirrored between them | Per uploader | Per file | Yes | One at a time |
 | Work after the upload, analysis | Yes: steps of your own, on a runner you choose (Oban's by default), run again over a table's files | No | No | Yes | Yes, on Oban |
-| Variants | Not yet ([#6](https://github.com/hattoriai/storehouse/issues/6)) | Made at upload | No | Yes | On demand |
-| Placeholders while an image loads | Yes: a step you add, a tiny WebP and the average colour, with Vix; or a step of your own (BlurHash) | No | No | Yes | No |
+| Variants | Yes: presets only, made once across a cluster with libvips, or URLs signed for imgproxy behind a CDN, or a renderer of your own | Made at upload | No | Yes | On demand |
+| Placeholders while an image loads | Yes: a step you add, with Vix: a tiny WebP, a ThumbHash or a BlurHash, and the average colour | No | No | Yes | No |
 | A table of files | Not yet ([#16](https://github.com/hattoriai/storehouse/issues/16)) | No | No | Yes | Yes |
 | The same file uploaded again is the one kept | Yes: before the upload, and when it is verified | No | No | No | No |
 | Endpoints and a client for frontends without LiveView | Yes: endpoints in batches, and a JavaScript client | No | No | Presign and complete | No |
 | Resumable and multipart uploads from the browser | Not yet ([#12](https://github.com/hattoriai/storehouse/issues/12)) | No | No | No | No |
 | A store in memory, for async tests | Yes, with assertions | No | Yes | Yes | No |
-| Dependencies | None (Vix for placeholders) | Req, ImageMagick | None | Several | Oban, Vix |
+| Dependencies | None (Vix for placeholders and variants) | Req, ImageMagick | None | Several | Oban, Vix |
 
 ## Roadmap
 
-* **Variants**: images resized and converted on demand, and cached, each
-  made once however many ask for it at the same time, across a cluster.
 * **Previews and analysis**: a PDF's first page, a video's poster, its
   length and size, audio; metadata of the app's own, read again later.
 * **Cleanup of unused files**: the files no record uses any more, found

@@ -45,11 +45,15 @@ if Code.ensure_loaded?(Vix.Vips.Operation) do
 
     and in JSON, for a React `<img>` (`Storehouse.File.to_map(file,
     analysis: [:placeholder])`).
+
+    For a frontend that decodes a hash instead, `Storehouse.Analyzer.ThumbHash`
+    and `Storehouse.Analyzer.BlurHash`.
     """
 
     @behaviour Storehouse.Analyzer
 
-    alias Vix.Vips.{Image, Operation}
+    alias Storehouse.Analyzer.Pixels
+    alias Vix.Vips.Image
 
     @formats %{
       webp: {".webp", "image/webp"},
@@ -69,82 +73,24 @@ if Code.ensure_loaded?(Vix.Vips.Operation) do
       size = Keyword.get(opts, :size, 16)
       format = Keyword.get(opts, :format, :webp)
       {suffix, mime} = Map.fetch!(@formats, format)
-      background = background(Keyword.get(opts, :background, if(format == :jpeg, do: "#ffffff")))
+      background = Keyword.get(opts, :background, if(format == :jpeg, do: "#ffffff"))
 
-      with {:ok, image} <- Operation.thumbnail(path, size, height: size),
-           {:ok, image} <- Image.copy_memory(image),
-           {:ok, image} <- srgb(image),
-           {:ok, image} <- flattened(image, background),
+      with {:ok, image} <- Pixels.small(path, size, Pixels.background(background)),
            {:ok, encoded} <- Image.write_to_buffer(image, "#{suffix}#{saved(format, opts)}"),
-           {:ok, pixels} <- Image.write_to_binary(image) do
+           {:ok, color} <- Pixels.color(image) do
         {:ok,
          %{
            "placeholder" => "data:#{mime};base64," <> Base.encode64(encoded),
-           "color" => hex(average(pixels, Image.bands(image))),
+           "color" => color,
            "width" => Image.width(image),
            "height" => Image.height(image)
          }}
       end
     end
 
-    # In sRGB, eight bits a band: greyscale, CMYK, 16-bit originals too.
-    defp srgb(image) do
-      with {:ok, image} <- Operation.colourspace(image, :VIPS_INTERPRETATION_sRGB) do
-        if Image.format(image) == :VIPS_FORMAT_UCHAR,
-          do: {:ok, image},
-          else: Operation.cast(image, :VIPS_FORMAT_UCHAR, shift: true)
-      end
-    end
-
-    defp flattened(image, nil), do: {:ok, image}
-
-    defp flattened(image, background) do
-      if Image.has_alpha?(image),
-        do: Operation.flatten(image, background: background),
-        else: {:ok, image}
-    end
-
     # No metadata: none of the original's EXIF (where it was taken), ICC
     # profile or XMP goes into a page.
     defp saved(:png, _opts), do: "[strip]"
     defp saved(_format, opts), do: "[Q=#{Keyword.get(opts, :quality, 40)},strip]"
-
-    defp background(nil), do: nil
-
-    defp background(<<"#", hex::binary-6>>) do
-      <<r, g, b>> = Base.decode16!(hex, case: :mixed)
-      [r, g, b]
-    end
-
-    defp background(other),
-      do: raise(ArgumentError, ":background is \"#rrggbb\", not #{inspect(other)}")
-
-    # The average of its pixels' colour, each counted as much as it is
-    # opaque.
-    defp average(pixels, 4) do
-      {r, g, b, a} =
-        for <<r, g, b, a <- pixels>>, reduce: {0, 0, 0, 0} do
-          {sr, sg, sb, sa} -> {sr + r * a, sg + g * a, sb + b * a, sa + a}
-        end
-
-      if a == 0, do: [0, 0, 0], else: [div(r, a), div(g, a), div(b, a)]
-    end
-
-    defp average(pixels, 3) do
-      {r, g, b, n} =
-        for <<r, g, b <- pixels>>, reduce: {0, 0, 0, 0} do
-          {sr, sg, sb, n} -> {sr + r, sg + g, sb + b, n + 1}
-        end
-
-      if n == 0, do: [0, 0, 0], else: [div(r, n), div(g, n), div(b, n)]
-    end
-
-    defp hex(rgb),
-      do:
-        "#" <>
-          Enum.map_join(
-            rgb,
-            &(&1 |> Integer.to_string(16) |> String.pad_leading(2, "0") |> String.downcase())
-          )
   end
 end
