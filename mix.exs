@@ -105,7 +105,13 @@ defmodule Storehouse.MixProject do
       ],
       groups_for_modules: [
         Files: [Storehouse, Storehouse.File, Storehouse.Check, Storehouse.ReadError],
-        Stores: [Storehouse.Adapter, Storehouse.Local, Storehouse.Local.Plug, Storehouse.S3],
+        Stores: [
+          Storehouse.Adapter,
+          Storehouse.Local,
+          Storehouse.Local.Plug,
+          Storehouse.S3,
+          Storehouse.Mirror
+        ],
         Analysis: [
           Storehouse.Analyzer,
           Storehouse.Analysis,

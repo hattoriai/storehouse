@@ -109,6 +109,52 @@ before. With `use Storehouse.S3, otp_app: :my_app`, a store's config is
 A `Storehouse.File` does not record its store: the field (or the call)
 names it.
 
+## Moving to another store
+
+`Storehouse.copy/2` copies a file from one store to another, under the
+same key, and `Storehouse.copy_prefix/2` every file under a prefix
+(`""` for all of them), several at once:
+
+```elixir
+Storehouse.copy_prefix("", from: MyApp.OldMedia, to: MyApp.Media, max_concurrency: 8)
+#=> {:ok, %{copied: 1_204, skipped: 0, failed: []}}
+```
+
+or from the command line, with its progress:
+
+```sh
+mix storehouse.copy --from MyApp.OldMedia --to MyApp.Media
+```
+
+A file the destination has already, of the same size and checksum, is
+skipped, so a copy can be stopped and run again, and copies only what is
+missing. Two buckets the same credentials reach copy in S3 itself, with
+no byte through the app; between other stores, a file goes a chunk at a
+time, its checksum checked on the way.
+
+To move without stopping, write to both while the old files are copied,
+with a mirror: a store that writes to its primary and copies each file to
+its mirrors, out of the request, retried until they answer
+(`Storehouse.Mirror`).
+
+```elixir
+defmodule MyApp.Media do
+  use Storehouse.Mirror, primary: MyApp.OldMedia, mirrors: [MyApp.NewMedia]
+end
+```
+
+1. Use `MyApp.Media` as the store, with `Storehouse.Cleaner` started.
+2. Copy what there was: `mix storehouse.copy --from MyApp.OldMedia --to MyApp.NewMedia`.
+3. Swap them, `primary: MyApp.NewMedia, mirrors: [MyApp.OldMedia]`, so
+   the app reads the new one; then use `MyApp.NewMedia` alone.
+
+The same copy brings an account's files from production into
+development, to look into a problem with real files:
+
+```sh
+mix storehouse.copy --from MyApp.ProductionMedia --to MyApp.Media --prefix accounts/42/
+```
+
 ## In development
 
 Two ways, as you like it.

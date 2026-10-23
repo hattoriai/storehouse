@@ -70,6 +70,10 @@ defmodule Storehouse.Local do
       @doc false
       def config, do: Application.get_env(unquote(otp_app), __MODULE__, [])
 
+      @doc false
+      # What the store is, for a copy made in the store itself (`Storehouse.copy/2`).
+      def __store__, do: {Storehouse.Local, config()}
+
       @impl true
       def put(key, path, meta), do: Storehouse.Local.put(config(), key, path, meta)
       @impl true
@@ -385,8 +389,12 @@ defmodule Storehouse.Local do
   def copy(from, to), do: copy(config(), from, to)
 
   @doc false
-  def copy(c, from, to) do
-    with {:ok, source} <- path(c, from),
+  def copy(c, from, to), do: copy_between(c, from, c, to)
+
+  @doc false
+  # A copy from one root to another, on this disk.
+  def copy_between(from_c, from, c, to) do
+    with {:ok, source} <- path(from_c, from),
          {:ok, destination} <- path(c, to),
          true <- File.regular?(source) || {:error, :enoent},
          :ok <- File.mkdir_p(Path.dirname(destination)) do
@@ -443,4 +451,7 @@ defmodule Storehouse.Local do
   @doc false
   # This store's config; a store of `use Storehouse.Local` has its own.
   def config, do: Application.get_env(:storehouse, __MODULE__, [])
+
+  @doc false
+  def __store__, do: {__MODULE__, config()}
 end

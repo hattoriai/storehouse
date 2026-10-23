@@ -84,6 +84,10 @@ defmodule Storehouse.S3 do
       @doc false
       def config, do: Application.get_env(unquote(otp_app), __MODULE__, [])
 
+      @doc false
+      # What the store is, for a copy made in the store itself (`Storehouse.copy/2`).
+      def __store__, do: {Storehouse.S3, config()}
+
       @impl true
       def put(key, path, meta), do: Storehouse.S3.put(config(), key, path, meta)
       @impl true
@@ -487,7 +491,10 @@ defmodule Storehouse.S3 do
 
     headers =
       object_headers(stream.type) ++
-        [{"x-amz-checksum-sha256", Base.encode64(Signature.sha256(body))}]
+        [
+          {"x-amz-sdk-checksum-algorithm", "SHA256"},
+          {"x-amz-checksum-sha256", Base.encode64(Signature.sha256(body))}
+        ]
 
     case request(c, :put, stream.uri, headers, body) do
       {:ok, status, _headers, _body} when status in 200..299 ->
@@ -624,11 +631,16 @@ defmodule Storehouse.S3 do
   def copy(from, to), do: copy(config(), from, to)
 
   @doc false
-  def copy(c, from, to) do
-    with {:ok, _from} <- object_uri(c, from),
+  def copy(c, from, to), do: copy_between(c, from, c, to)
+
+  @doc false
+  # A copy from one bucket to another the same credentials reach, in S3
+  # (CopyObject, for a file of up to 5 GB): no byte goes through the app.
+  def copy_between(from_c, from, c, to) do
+    with {:ok, _from} <- object_uri(from_c, from),
          {:ok, uri} <- object_uri(c, to) do
       source =
-        "/#{Keyword.fetch!(c, :bucket)}/" <>
+        "/#{Keyword.fetch!(from_c, :bucket)}/" <>
           Enum.map_join(String.split(from, "/"), "/", &Signature.encode/1)
 
       # A copy can fail after its 200: the error is then in the body.
@@ -646,6 +658,15 @@ defmodule Storehouse.S3 do
           {:error, reason}
       end
     end
+  end
+
+  @doc false
+  # Whether a copy from one store's bucket to another's can be made in S3:
+  # the same endpoint, region and credentials.
+  def same_account?(from_c, c) do
+    Enum.all?([:endpoint, :region, :access_key_id, :secret_access_key, :session_token], fn key ->
+      from_c[key] == c[key]
+    end)
   end
 
   defp error_in_body(body), do: if(body =~ "<Error>", do: {:error, {:s3, 200, body}}, else: :ok)
@@ -733,6 +754,9 @@ defmodule Storehouse.S3 do
   @doc false
   # This store's config; a store of `use Storehouse.S3` has its own.
   def config, do: Application.get_env(:storehouse, __MODULE__, [])
+
+  @doc false
+  def __store__, do: {__MODULE__, config()}
 
   # A signed request, with :httpc. A file's body is streamed from the disk.
   defp request(c, method, uri, headers, body) do

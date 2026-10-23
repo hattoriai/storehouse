@@ -50,6 +50,10 @@ It gives your app:
   (Cloudflare R2, MinIO, Tigris, LocalStack), with no other library; or
   one of your own, in three callbacks; and as many of each as you need
   (`use Storehouse.S3`), a store per Ecto field;
+* **moving between stores**: files copied from one store to another,
+  in the store itself where it can, run again to copy only what is
+  missing (`mix storehouse.copy`), and a mirror that writes to a second
+  store as well, for moving to another provider without stopping;
 * **uploads straight to the store**: the browser sends a file to the
   bucket at a URL your app signed (its type, its size, ten minutes), so a
   large file never goes through your app, and Storehouse checks it there
@@ -241,7 +245,7 @@ another library is welcome as an issue.
 | Reading a file back | Yes | Yes | Yes | Yes | Yes |
 | A file's own metadata | Yes, kept apart from the analysis's | No | Yes | Yes | Yes, shared with the analysis's |
 | A photo's location removed, its credit written, without re-encoding | Yes, a step you add: JPEG, PNG and WebP built in, an editor of yours (ExifTool) for other types | Only by re-encoding, with ImageMagick | No | Only by re-encoding | Only by re-encoding |
-| Several stores at once | Yes: named stores, a store per field | Per uploader | Per file | Yes | One at a time |
+| Several stores at once | Yes: named stores, a store per field, files copied and mirrored between them | Per uploader | Per file | Yes | One at a time |
 | Work after the upload, analysis | Yes: steps of your own, in a process of your app's or in Oban | No | No | Yes | Yes, on Oban |
 | Variants | Not yet ([#6](https://github.com/hattoriai/storehouse/issues/6)) | Made at upload | No | Yes | On demand |
 | Placeholders while an image loads | Not yet ([#4](https://github.com/hattoriai/storehouse/issues/4)) | No | No | Yes | No |
@@ -262,7 +266,6 @@ another library is welcome as an issue.
   by comparing the app's records with the store.
 * **Resumable uploads** that survive a reconnect (and the tus protocol),
   and multipart uploads straight from the browser, for very large files.
-* **Mirror**: writing to two stores at once, for migrating between them.
 * **Proxy mode**: streaming private bucket files through the app, for a
   CDN in front.
 * **Azure and native Google Cloud Storage**: Google Cloud Storage works
