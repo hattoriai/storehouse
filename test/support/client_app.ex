@@ -6,6 +6,7 @@ defmodule StorehouseTest.ClientApp do
   use Plug.Router
 
   plug(Storehouse.Local.Plug)
+  plug(:secret)
   plug(:match)
   plug(:dispatch)
 
@@ -24,6 +25,9 @@ defmodule StorehouseTest.ClientApp do
     to: Storehouse.Plug.Multipart,
     init_opts: [owner: "accounts/42", adapter: Storehouse.S3, part_bytes: 5_242_880]
   )
+
+  # What a Phoenix endpoint gives every conn.
+  defp secret(conn, _opts), do: %{conn | secret_key_base: String.duplicate("s", 64)}
 
   match _ do
     send_resp(conn, 404, "")

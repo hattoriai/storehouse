@@ -35,6 +35,34 @@ defmodule StorehouseTest.FilesServer do
     conn |> put_resp_header("location", "/loop") |> send_resp(302, "")
   end
 
+  # Answers of 5 MB that are not the file: a redirect, another 2xx, an
+  # error, a chunk at a time.
+  for {path, status} <- [{"/big-redirect", 302}, {"/big-203", 203}, {"/big-500", 500}] do
+    get path do
+      conn = conn |> put_resp_header("location", "/small.png") |> send_chunked(unquote(status))
+
+      Enum.reduce_while(1..80, conn, fn _n, conn ->
+        case chunk(conn, :binary.copy("x", 65_536)) do
+          {:ok, conn} -> {:cont, conn}
+          {:error, _closed} -> {:halt, conn}
+        end
+      end)
+    end
+  end
+
+  get "/slow" do
+    conn = send_chunked(conn, 200)
+
+    Enum.reduce_while(1..50, conn, fn _n, conn ->
+      Process.sleep(100)
+
+      case chunk(conn, "x") do
+        {:ok, conn} -> {:cont, conn}
+        {:error, _closed} -> {:halt, conn}
+      end
+    end)
+  end
+
   match _ do
     send_resp(conn, 404, "")
   end

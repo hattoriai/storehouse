@@ -52,31 +52,15 @@ defmodule Storehouse.Purge.Cloudflare do
   end
 
   defp post(url, token, body, timeout) do
-    {:ok, _apps} = Application.ensure_all_started([:inets, :ssl])
+    headers = [{"authorization", "Bearer " <> token}, {"content-type", "application/json"}]
 
-    http_opts = [
-      timeout: timeout,
-      connect_timeout: timeout,
-      ssl: [
-        verify: :verify_peer,
-        cacerts: :public_key.cacerts_get(),
-        customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]
-      ]
-    ]
-
-    request =
-      {String.to_charlist(url), [{~c"authorization", String.to_charlist("Bearer " <> token)}],
-       ~c"application/json", Storehouse.JSON.encode!(body)}
-
-    case :httpc.request(:post, request, http_opts, body_format: :binary) do
-      {:ok, {{_version, 200, _reason}, _headers, _body}} ->
-        :ok
-
-      {:ok, {{_version, status, _reason}, _headers, body}} ->
-        {:error, {:cloudflare, status, body}}
-
-      {:error, reason} ->
-        {:error, reason}
+    case Storehouse.HTTP.request(:post, url, headers, Storehouse.JSON.encode!(body),
+           timeout: timeout,
+           connect_timeout: timeout
+         ) do
+      {:ok, 200, _headers, _body} -> :ok
+      {:ok, status, _headers, body} -> {:error, {:cloudflare, status, body}}
+      {:error, reason} -> {:error, reason}
     end
   end
 end

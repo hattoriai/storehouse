@@ -195,7 +195,8 @@ defmodule Storehouse.VariantsTest do
       test = self()
       opts = opts(renderer: {Counting, test: test, sleep: 500})
       first = Task.async(fn -> Storehouse.variant(file, :thumb, opts) end)
-      assert_receive {:rendered, _node, :thumb, 320}
+      # Drawing: under a busy suite, it may take a while to start.
+      assert_receive {:rendered, _node, :thumb, 320}, 2_000
 
       assert {:error, :timeout} =
                Storehouse.variant(file, :thumb, Keyword.put(opts, :timeout, 50))
@@ -216,6 +217,13 @@ defmodule Storehouse.VariantsTest do
 
       assert {:error, reason} = Storehouse.variant(cut, :thumb, opts())
       assert is_binary(reason)
+    end
+
+    test "an original of more pixels than the renderer takes, by its header", %{original: file} do
+      # harbour.jpg is 1200 × 800: past 900,000 pixels.
+      small = opts(renderer: {Storehouse.Renderer.Vix, max_pixels: 900_000})
+      assert {:error, :too_large} = Storehouse.variant(file, :thumb, small)
+      assert {:ok, _thumb} = Storehouse.variant(file, :thumb, opts())
     end
 
     test "a renderer of URLs makes none", %{original: file} do

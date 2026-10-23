@@ -223,8 +223,9 @@ defmodule Storehouse.Adapter do
 
   @doc """
   Signs the browser's `PUT` of part `number`, with its SHA-256 in Base64
-  (`:checksum`) when it is given, so that the store refuses other bytes:
-  `{:ok, %{method: "PUT", url: …, headers: %{…}}}`.
+  (`:checksum`) when it is given, so that the store refuses other bytes,
+  and its size (`:bytes`) when it is given, so that it refuses a larger
+  part: `{:ok, %{method: "PUT", url: …, headers: %{…}}}`.
   """
   @callback multipart_sign(key(), String.t(), pos_integer(), keyword()) ::
               {:ok, %{method: String.t(), url: String.t(), headers: map()}} | {:error, term()}

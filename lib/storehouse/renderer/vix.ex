@@ -22,6 +22,12 @@ if Code.ensure_loaded?(Vix.Vips.Operation) do
     ## Options
 
       * `:quality` - for a preset that gives none. The default is 80.
+      * `:max_pixels` - the largest original it renders, in pixels, read
+        from its header before a pixel is decoded: a larger one gives
+        `{:error, :too_large}`. The default is 200,000,000 (a 200 MP
+        photograph). `Storehouse.Check`'s `:max_pixels` refuses most at
+        upload; this one also holds for an image whose size the upload's
+        first bytes did not say (a TIFF whose directory comes last).
     """
 
     @behaviour Storehouse.Renderer
@@ -35,10 +41,12 @@ if Code.ensure_loaded?(Vix.Vips.Operation) do
     }
     # Any height: a box as tall as libvips takes.
     @any 10_000_000
+    @max_pixels 200_000_000
 
     @impl true
     def render(source, destination, %Storehouse.Variant{} = variant, opts) do
-      with {:ok, image} <- sized(source, variant),
+      with :ok <- within(source, Keyword.get(opts, :max_pixels, @max_pixels)),
+           {:ok, image} <- sized(source, variant),
            {:ok, image} <- coloured(image, variant),
            {:ok, image} <- flattened(image, variant) do
         Image.write_to_file(image, destination <> saved(variant, opts))
@@ -77,6 +85,18 @@ if Code.ensure_loaded?(Vix.Vips.Operation) do
         width,
         [height: height, size: :VIPS_SIZE_DOWN] ++ profile ++ extra
       )
+    end
+
+    @doc false
+    # No larger than max pixels, by its header: libvips reads that alone.
+    def within(source, max) do
+      case Image.new_from_file(source) do
+        {:ok, image} ->
+          if Image.width(image) * Image.height(image) > max, do: {:error, :too_large}, else: :ok
+
+        {:error, _reason} = error ->
+          error
+      end
     end
 
     # Its size upright, as its EXIF turns it.

@@ -156,47 +156,156 @@ defmodule Storehouse.Image.Exif do
         tiff
 
       {gps, others} ->
-        tiff =
-          Enum.reduce(gps, tiff, fn {_tag, _type, _count, at}, tiff ->
-            blank_ifd(tiff, uint(at, endian), endian)
-          end)
+        # Each GPS directory once, however many entries point to it, and
+        # every range zeroed in one pass.
+        ranges =
+          gps
+          |> Enum.map(fn {_tag, _type, _count, at} -> uint(at, endian) end)
+          |> Enum.uniq()
+          |> Enum.flat_map(&ifd_ranges(tiff, &1, endian))
 
         # The directory in place, without the GPS entry: nothing else moves.
         directory = encode_ifd(raw(others), ifd0, endian, next)
-        overwrite(tiff, ifd0, pad(directory, 6 + 12 * length(entries)))
+
+        tiff
+        |> zeroed(ranges)
+        |> overwrite(ifd0, pad(directory, 6 + 12 * length(entries)))
     end
   end
 
-  # A directory and the values it points to, zeroed.
-  defp blank_ifd(tiff, at, endian) do
+  # A directory and the values it points to, as ranges to zero.
+  defp ifd_ranges(tiff, at, endian) do
     {entries, _next} = ifd!(tiff, at, endian)
-
-    tiff
-    |> blank_values(entries, endian)
-    |> overwrite(at, :binary.copy(<<0>>, 6 + 12 * length(entries)))
+    [{at, 6 + 12 * length(entries)} | value_ranges(entries, endian)]
   end
 
-  # The values longer than four bytes these entries point to, zeroed.
-  defp blank_values(tiff, entries, endian) do
-    Enum.reduce(entries, tiff, fn {_tag, type, count, value}, tiff ->
-      case value_size(type, count) do
-        size when is_integer(size) and size > 4 ->
-          overwrite(tiff, uint(value, endian), :binary.copy(<<0>>, size))
+  # The values longer than four bytes these entries point to.
+  defp value_ranges(entries, endian) do
+    for {_tag, type, count, value} <- entries,
+        size = value_size(type, count),
+        is_integer(size) and size > 4,
+        do: {uint(value, endian), size}
+  end
 
-        _inline ->
-          tiff
+  # The binary with these ranges of it zeroed, built once.
+  defp zeroed(binary, ranges) do
+    total = byte_size(binary)
+
+    {parts, from} =
+      ranges
+      |> Enum.sort()
+      |> Enum.reduce({[], 0}, fn {at, size}, {parts, from} ->
+        if at + size > total, do: raise(ArgumentError, "a value past the TIFF's end")
+        start = max(at, from)
+        stop = max(at + size, from)
+        kept = binary_part(binary, from, max(start - from, 0))
+        {[:binary.copy(<<0>>, stop - start), kept | parts], stop}
+      end)
+
+    IO.iodata_to_binary(Enum.reverse([binary_part(binary, from, total - from) | parts]))
+  end
+
+  @xmp_gps_tag ~r{<(/?)exif:(GPS\w*)}
+  @xmp_gps_attribute ~r{exif:GPS\w*\s*=\s*(["'])}
+
+  @doc """
+  XMP without its GPS properties: its `exif:GPS…` elements and attributes.
+  In one pass over the text, however it is made: each tag's end and each
+  value's closing quote is found by walking forward, never by searching
+  again from every start.
+  """
+  def xmp_without_gps(xml) do
+    ranges = gps_elements(xml) ++ gps_attributes(xml)
+    removed(xml, ranges)
+  end
+
+  # The outermost exif:GPS… elements, from their start to their end.
+  defp gps_elements(xml) do
+    ends = positions(xml, ">")
+
+    @xmp_gps_tag
+    |> Regex.scan(xml, return: :index)
+    |> Enum.reduce({[], [], ends}, fn [{at, _}, {_, slash}, {name_at, name_size}], acc ->
+      {ranges, stack, ends} = acc
+      ends = Enum.drop_while(ends, &(&1 < at))
+
+      case ends do
+        [] ->
+          {ranges, stack, ends}
+
+        [stop | _rest] ->
+          name = binary_part(xml, name_at, name_size)
+          closed = binary_part(xml, stop - 1, 1) == "/"
+          tag(slash == 1, closed, name, at, stop + 1, {ranges, stack, ends})
       end
     end)
+    |> elem(0)
   end
 
-  @xmp_gps_attribute ~r/\s+exif:GPS\w*\s*=\s*("[^"]*"|'[^']*')/
-  @xmp_gps_element ~r{<exif:(GPS\w*)\b[^>]*?(/>|>.*?</exif:\1\s*>)}s
+  # A self-closed element, or one opened, or closed: the ranges of those
+  # with no GPS element around them.
+  defp tag(false, true, _name, at, stop, {ranges, [], ends}),
+    do: {[{at, stop} | ranges], [], ends}
 
-  @doc "XMP without its GPS properties."
-  def xmp_without_gps(xml) do
-    xml
-    |> String.replace(@xmp_gps_attribute, "")
-    |> String.replace(@xmp_gps_element, "")
+  defp tag(false, true, _name, _at, _stop, acc), do: acc
+
+  defp tag(false, false, name, at, _stop, {ranges, stack, ends}),
+    do: {ranges, [{name, at} | stack], ends}
+
+  defp tag(true, _closed, name, _at, stop, {ranges, stack, ends}) do
+    case Enum.drop_while(stack, fn {open, _at} -> open != name end) do
+      [] -> {ranges, stack, ends}
+      [{_name, at}] -> {[{at, stop} | ranges], [], ends}
+      [_opened | outer] -> {ranges, outer, ends}
+    end
+  end
+
+  # exif:GPS…="…" attributes, with the white space before them.
+  defp gps_attributes(xml) do
+    quotes = %{"\"" => positions(xml, "\""), "'" => positions(xml, "'")}
+
+    @xmp_gps_attribute
+    |> Regex.scan(xml, return: :index)
+    |> Enum.reduce({[], quotes}, fn [{at, size}, {quote_at, 1}], {ranges, quotes} ->
+      quote = binary_part(xml, quote_at, 1)
+      after_open = Enum.drop_while(quotes[quote], &(&1 <= quote_at))
+      quotes = Map.put(quotes, quote, after_open)
+      start = spaced_from(xml, at)
+
+      case after_open do
+        [close | _rest] when start < at and close >= at + size ->
+          {[{start, close + 1} | ranges], quotes}
+
+        _unclosed_or_unspaced ->
+          {ranges, quotes}
+      end
+    end)
+    |> elem(0)
+  end
+
+  # Where the white space before `at` starts.
+  defp spaced_from(xml, at) when at > 0 do
+    if binary_part(xml, at - 1, 1) in [" ", "\t", "\n", "\r"],
+      do: spaced_from(xml, at - 1),
+      else: at
+  end
+
+  defp spaced_from(_xml, at), do: at
+
+  defp positions(xml, char), do: for({at, _} <- :binary.matches(xml, char), do: at)
+
+  # The text without these ranges, `{from, to}`, which may overlap.
+  defp removed(xml, ranges) do
+    {parts, from} =
+      ranges
+      |> Enum.sort()
+      |> Enum.reduce({[], 0}, fn {start, stop}, {parts, from} ->
+        if start >= from,
+          do: {[binary_part(xml, from, start - from) | parts], stop},
+          else: {parts, max(stop, from)}
+      end)
+
+    IO.iodata_to_binary(Enum.reverse([binary_part(xml, from, byte_size(xml) - from) | parts]))
   end
 
   defp codes(tags) do
@@ -244,12 +353,19 @@ defmodule Storehouse.Image.Exif do
     end
   end
 
+  # Each tag kept once, and no more bytes kept than the TIFF has: values
+  # that point to the same bytes are not copied again and again.
   defp values(tiff, entries, codes, endian) do
-    for {tag, type, count, value} <- entries,
-        tag in codes,
-        size = value_size(type, count),
-        size != nil,
-        do: {tag, type, count, value_bytes(tiff, value, size, endian)}
+    kept =
+      for {tag, type, count, value} <- Enum.uniq_by(entries, &elem(&1, 0)),
+          tag in codes,
+          size = value_size(type, count),
+          size != nil,
+          do: {tag, type, count, value_bytes(tiff, value, size, endian)}
+
+    if kept |> Enum.map(&byte_size(elem(&1, 3))) |> Enum.sum() > byte_size(tiff),
+      do: raise(ArgumentError, "values larger than the TIFF"),
+      else: kept
   end
 
   defp writable!({tag, value}) when tag in @writable and is_nil(value), do: :ok
@@ -276,10 +392,7 @@ defmodule Storehouse.Image.Exif do
     if replaced == [] and written == [] do
       tiff
     else
-      tiff =
-        tiff
-        |> blank_values(replaced, endian)
-        |> overwrite(ifd0, :binary.copy(<<0>>, 6 + 12 * length(entries)))
+      tiff = zeroed(tiff, [{ifd0, 6 + 12 * length(entries)} | value_ranges(replaced, endian)])
 
       tiff = pad(tiff, byte_size(tiff) + rem(byte_size(tiff), 2))
       at = byte_size(tiff)

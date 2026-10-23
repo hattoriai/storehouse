@@ -153,7 +153,7 @@ code describe them in October 2026. A correction is welcome as an issue.
 | JavaScript client, non-LiveView endpoints | Yes | No | No | Partly | No |
 | Resumable and multipart uploads | Yes | No | No | No | No |
 | In-memory store for tests | Yes | No | Yes | Yes | No |
-| Dependencies | Plug, Telemetry | Req, ImageMagick | None | Several | Oban, Vix |
+| Dependencies | Plug, Req, Telemetry | Req, ImageMagick | None | Several | Oban, Vix |
 
 ## Roadmap
 

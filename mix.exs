@@ -13,7 +13,7 @@ defmodule Storehouse.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       dialyzer: [
-        plt_add_apps: [:mix, :ex_unit, :inets, :ssl, :public_key, :ecto],
+        plt_add_apps: [:mix, :ex_unit, :ecto],
         plt_core_path: "priv/plts",
         plt_file: {:no_warn, "priv/plts/project.plt"},
         ignore_warnings: ".dialyzer_ignore.exs"
@@ -28,17 +28,7 @@ defmodule Storehouse.MixProject do
   end
 
   def application do
-    # :inets and :ssl for the files an app lets the server fetch
-    # (Storehouse.fetch/2), started when it does.
-    [
-      extra_applications: [
-        :logger,
-        :crypto,
-        inets: :optional,
-        ssl: :optional,
-        public_key: :optional
-      ]
-    ]
+    [extra_applications: [:logger, :crypto]]
   end
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
@@ -63,6 +53,8 @@ defmodule Storehouse.MixProject do
       # rest of Storehouse works as it is.
       {:phoenix_live_view, "~> 1.1", optional: true},
       {:plug, "~> 1.15"},
+      # HTTP, for S3, fetch/2, purges and warming: Req, on Finch and Mint.
+      {:req, "~> 0.5"},
       # Storehouse.Local's signatures (Plug.Crypto.secure_compare/2); 2.2.1
       # and later, for EEF-CVE-2026-105963, in the apps that use Storehouse.
       {:plug_crypto, "~> 2.2 and >= 2.2.1"},

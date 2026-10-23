@@ -17,6 +17,20 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   logs, in the stack trace. Storehouse's own call, in `Storehouse.Local`,
   gives it binaries only, but an app that
   updates Storehouse now gets the fixed plug_crypto too.
+- An upload's URL straight to S3 is signed with `If-None-Match: *`: the
+  bucket takes it only where no file is, so the URL cannot replace a file
+  once `verify_upload/2` checked it. The bucket's CORS must allow
+  `if-none-match`; a store that refuses the header takes
+  `if_none_match: false`.
+- `Storehouse.Local.Plug` and the local store put an upload in place
+  only where no file is (a link, which fails on one): two uploads of a
+  key at once can no longer replace a checked file.
+- `:max_pixels` refuses an image whose header gives a side of a million
+  pixels or more, which it took as of unknown size.
+- `Storehouse.fetch/2`'s `:max_bytes` holds for every answer, a
+  redirect's or an error's as much as the file's, and `:timeout` for the
+  whole download: with `:httpc`, an answer other than a `200` or `206`
+  was read whole, however large. Its file is created where none is.
 
 ### Added
 
@@ -37,8 +51,10 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   upload a part at a time (the adapter's `multipart_put/4`), or into a
   file stored when it is whole, checked as every upload is; the uploads
   in progress kept in ETS by `Storehouse.Tus`, which gives up those that
-  expired, or in a `Storehouse.Tus.State` of the app's. Tested against
-  tuspy, a tus client.
+  expired, each in the store it went to, or in a `Storehouse.Tus.State`
+  of the app's. One owner has at most `:max_uploads` in progress (10),
+  their sizes counted against its room. Tested against tuspy, a tus
+  client.
 
 - Very large files sent from the browser straight to the bucket in parts:
   `Storehouse.presign_multipart/4` (checked as `presign_upload/4` is,
@@ -49,8 +65,10 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   refused, then checked as `verify_upload/2` checks) and
   `abort_multipart/3`; the adapter callbacks behind them, which
   `Storehouse.S3` has; `Storehouse.Plug.Multipart`, the same as JSON
-  endpoints; and the JavaScript client sending large files in parts, a
-  few at a time, each tried again, remembered across reloads.
+  endpoints, each request with the token `start` signed (its key, owner,
+  size and parts), each part's URL signed for its size; and the
+  JavaScript client sending large files in parts, a few at a time, each
+  tried again, remembered across reloads.
   `Storehouse.Sweeper` gives up multipart uploads never completed.
 - A library of files, optional: `Storehouse.Ecto.Migrations` makes a
   table of files (`storehouse_blobs`, or the app's own names) and of
@@ -67,7 +85,8 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   `store/2` and `presign_upload/4`) keeps a `Cache-Control` with each
   file, however it came in (stored, presigned and signed, streamed,
   copied or promoted); `Storehouse.Local.Plug` takes `:cache_control`
-  too. `Storehouse.Purge` tells the CDN to forget a file deleted, its
+  too, but for a private store, whose files are `private` and kept no
+  longer than their signed URL. `Storehouse.Purge` tells the CDN to forget a file deleted, its
   variants and the app's routes to it, by URL, `Cache-Tag` or prefix, as
   a job of the runner whose arguments never hold the credentials;
   `Storehouse.Purge.Cloudflare` is one purger. `Storehouse.Proxy` streams
@@ -89,7 +108,9 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   without metadata), once across a cluster's nodes, stored under
   `variants/<key>/` and served by `Storehouse.Variants.Plug` for a year;
   or gives URLs of a service (`Storehouse.Renderer.Imgproxy`, signed), or
-  is the app's own. Deleting an original deletes its variants.
+  is the app's own, which refuses an original past `:max_pixels` (200
+  MP) by its header. An original deleted, swept or promoted takes its
+  variants with it, and one past its time has none.
 - Placeholders: `Storehouse.Analyzer.Placeholder`, a step that makes a
   photograph's placeholder while it loads (a tiny WebP, JPEG or PNG as a
   data URI) and its average colour, with libvips through Vix (optional),
@@ -104,7 +125,8 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   the request as a job of the app's runner, then the app's function with
   it (`store_later/3`), with nothing on the disk and no more than a chunk
   in memory. Its formats are of `Storehouse.Archive.Format`: zip
-  (`Storehouse.Archive.Zip`, the default: deflate where it shrinks,
+  (`Storehouse.Archive.Zip`, the default: deflate where it shrinks, the
+  rest in deflate's stored blocks, which say where each file ends;
   AES-256 with a password, ZIP64 past 4 GB or 65,535 files), tar
   (`Storehouse.Archive.Tar`, pax headers, gzipped when it shrinks), or the
   app's. `max_bytes:` splits it in whole archives, `expires_in:` makes it
@@ -220,8 +242,9 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   refuses another's (`:not_owner`); `Storehouse.owns?/2` and
   `owner_key/2`. `:room` refuses a file larger than the room left
   (`:storage_full`): at presign by the size declared, at `verify_upload/2`
-  by the size the store gives. `Storehouse.usage/2` counts an owner's
-  files in the store.
+  by the size the store gives, and as a LiveView upload streams in
+  (`mode: :stream`). `Storehouse.usage/2` counts an owner's files in the
+  store.
 - What happens to files, told as it happens (`Storehouse.Notify`): `:stored`
   (`store/2`, `verify_upload/2`), `:analyzed` (with the steps that ran;
   later analysis once the app's `:then` has it), `:failed` (a step, with
@@ -256,11 +279,14 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 - Uploads from any client: `Storehouse.Batch.presign/2` and `register/2`
   sign and check a batch of uploads straight to the store, one result per
   file (`{:ok, _}`, `{:existing, file}` or `{:error, code}`), the room
-  shared by the batch, the same bytes twice in a batch one file.
-  `Storehouse.Plug.Presign` and `Storehouse.Plug.Register` answer them in
-  JSON, with the owner, the room and the files the app has asked of
-  functions of the conn, and the app's own JSON of its records from
-  `:then`.
+  shared by the batch, the same bytes twice in a batch one file. Each
+  upload comes with a token, its key and owner signed with the app's
+  secret: `register/2` checks only a key with its token, and leaves any
+  other file as it is. `Storehouse.Plug.Presign` and
+  `Storehouse.Plug.Register` answer them in JSON (and take
+  `application/json` only), with the owner, the room and the files the
+  app has asked of functions of the conn, the endpoint's
+  `secret_key_base`, and the app's own JSON of its records from `:then`.
 - `storehouse/client`, in the npm package: the browser's part of uploads
   from any client (`createUploadQueue`), for the presign and register
   plugs, with no dependencies. Each file's SHA-256 read in a Web Worker
@@ -279,6 +305,9 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Changed
 
+- Storehouse makes its requests (S3, `fetch/2`, purges, warming) with
+  Req, now a dependency, in place of `:httpc`: one HTTP client, which
+  streams every answer.
 - The README is shorter, and its comparison table plain. Everything
   Storehouse does is in the new Features guide.
 - A file with a HEIF `ftyp` box was `application/octet-stream`; it is now

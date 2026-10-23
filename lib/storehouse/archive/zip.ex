@@ -5,7 +5,10 @@ defmodule Storehouse.Archive.Zip do
 
     * Each file is compressed (deflate) or stored as it is, as the
       archive's `:compression` says: by default, compressed where it
-      shrinks.
+      shrinks. A file stored as it is goes in deflate's stored blocks,
+      each of which says its size: a reader that reads the zip as it
+      comes finds each file's end from them, never from the file's own
+      bytes, which a file could make look like another file's start.
     * With `:password`, each file is encrypted with AES-256 (WinZip's
       AE-2, a key of the password for each file, PBKDF2 and HMAC-SHA1):
       7-Zip, WinZip, Keka and The Unarchiver open it; macOS's Archive
@@ -33,6 +36,8 @@ defmodule Storehouse.Archive.Zip do
   # What deflate can add to bytes that do not shrink: 5 bytes every
   # 16 KB block, and its end.
   @deflate_margin 1_048_576
+  # The most a stored block of deflate holds.
+  @block 65_535
 
   @impl true
   def content_type(_entries, _opts), do: "application/zip"
@@ -126,6 +131,9 @@ defmodule Storehouse.Archive.Zip do
           size: entry.size,
           data: entry.data,
           deflate: deflate,
+          # Not compressed, in stored blocks; an encrypted file's end is its
+          # sizes', known before it.
+          blocks: not deflate and not aes and entry.size != 0,
           aes: aes,
           zip64: zip64?(entry.size, deflate, aes),
           offset: offset
@@ -140,14 +148,22 @@ defmodule Storehouse.Archive.Zip do
   defp zip64?(nil, _deflate, _aes), do: true
 
   defp zip64?(size, deflate, aes) do
-    margin = if(deflate, do: div(size, 1_000) + @deflate_margin, else: 0)
+    margin = if(deflate, do: div(size, 1_000) + @deflate_margin, else: framing(size))
     size + margin + if(aes, do: @aes_overhead, else: 0) >= @limit
   end
 
   # Sizes
 
   defp stored_data(%{size: nil}), do: 0
-  defp stored_data(entry), do: entry.size + if(entry.aes, do: @aes_overhead, else: 0)
+
+  defp stored_data(entry),
+    do:
+      entry.size + if(entry.aes, do: @aes_overhead, else: 0) +
+        if(entry.blocks, do: framing(entry.size), else: 0)
+
+  # Stored blocks: 5 bytes for each 65,535 and for the last, which may be
+  # empty.
+  defp framing(size), do: 5 * (div(size, @block) + 1)
 
   # The most deflate adds to bytes that do not shrink: zlib falls back to
   # stored blocks, 5 bytes for each 64 KB, so `:about` is no less than the
@@ -196,7 +212,8 @@ defmodule Storehouse.Archive.Zip do
 
   defp open_file(entry, password) do
     z = if entry.deflate, do: deflater()
-    file = %{crc: 0, raw: 0, out: 0, z: z, aes: nil, head: ""}
+    blocks = if entry.blocks, do: ""
+    file = %{crc: 0, raw: 0, out: 0, z: z, blocks: blocks, aes: nil, head: ""}
 
     if password do
       {head, aes} = AES.open(password)
@@ -214,22 +231,49 @@ defmodule Storehouse.Archive.Zip do
 
   defp written(file, data) do
     file = %{file | crc: :erlang.crc32(file.crc, data), raw: file.raw + IO.iodata_length(data)}
-    data = if file.z, do: :zlib.deflate(file.z, data), else: data
-    encrypted(file, data)
+
+    cond do
+      file.z ->
+        encrypted(file, :zlib.deflate(file.z, data))
+
+      file.blocks ->
+        {full, rest} = blocks(file.blocks <> IO.iodata_to_binary(data), [])
+        encrypted(%{file | blocks: rest}, full)
+
+      true ->
+        encrypted(file, data)
+    end
+  end
+
+  # Every whole stored block of the bytes, and the rest, for the next.
+  defp blocks(<<block::binary-size(@block), rest::binary>>, out),
+    do: blocks(rest, [stored_block(block, 0) | out])
+
+  defp blocks(rest, out), do: {Enum.reverse(out), rest}
+
+  defp stored_block(bytes, final) do
+    size = byte_size(bytes)
+    [<<final, size::little-16, bxor(size, 0xFFFF)::little-16>>, bytes]
   end
 
   defp finished(file) do
     tail =
-      if file.z do
-        tail = :zlib.deflate(file.z, [], :finish)
-        :ok = :zlib.deflateEnd(file.z)
-        :zlib.close(file.z)
-        tail
-      else
-        []
+      cond do
+        file.z ->
+          tail = :zlib.deflate(file.z, [], :finish)
+          :ok = :zlib.deflateEnd(file.z)
+          :zlib.close(file.z)
+          tail
+
+        # The last block, of the bytes left: the end of the file.
+        file.blocks ->
+          stored_block(file.blocks, 1)
+
+        true ->
+          []
       end
 
-    {out, file} = encrypted(%{file | z: nil}, tail)
+    {out, file} = encrypted(%{file | z: nil, blocks: nil}, tail)
 
     if file.aes do
       mac = AES.mac(file.aes)
@@ -254,6 +298,7 @@ defmodule Storehouse.Archive.Zip do
 
   defp method(%{aes: true}), do: 99
   defp method(%{deflate: true}), do: 8
+  defp method(%{blocks: true}), do: 8
   defp method(_entry), do: 0
 
   defp version(%{aes: true}), do: 51

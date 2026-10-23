@@ -5,11 +5,13 @@ if Code.ensure_loaded?(Vix.Vips.Operation) do
     # loads, never decoded whole, turned as its EXIF says, in sRGB, eight
     # bits a band, transparency laid on a background when one is given.
 
+    alias Storehouse.Renderer.Vix, as: Renderer
     alias Vix.Vips.{Image, Operation}
 
     @doc false
     def small(path, size, background) do
-      with {:ok, image} <- Operation.thumbnail(path, size, height: size),
+      with :ok <- Renderer.within(path, 200_000_000),
+           {:ok, image} <- Operation.thumbnail(path, size, height: size),
            {:ok, image} <- Image.copy_memory(image),
            {:ok, image} <- srgb(image),
            do: flattened(image, background)

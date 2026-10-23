@@ -53,6 +53,22 @@ defmodule Storehouse.SignedTest do
       assert File.read!(Path.join(root, upload.key)) == data
     end
 
+    test "two writes of one key at once: the first stays", %{root: root} do
+      key = "2026/10/0b6f4c2e-5f0a-4d4c-9a51-2f0e7d1c3b9a-a.png"
+      config = Storehouse.Local.config()
+
+      # Both began before either was done: neither saw a file there.
+      {:ok, first} = Storehouse.Local.stream_open(config, key, %{})
+      {:ok, second} = Storehouse.Local.stream_open(config, key, %{})
+      {:ok, first} = Storehouse.Local.stream_write(first, "checked")
+      {:ok, second} = Storehouse.Local.stream_write(second, "never!!")
+
+      assert {:ok, _url} = Storehouse.Local.stream_close(first)
+      assert {:error, :eexist} = Storehouse.Local.stream_close(second)
+      assert File.read!(Path.join(root, key)) == "checked"
+      assert File.ls!(Path.dirname(Path.join(root, key))) == [Path.basename(key)]
+    end
+
     test "is taken at the URL it signed, of its type and size, once", %{root: root, public: opts} do
       data = File.read!(Path.join(@fixtures, "harbour.jpg"))
       assert {:ok, upload} = Storehouse.presign_upload("Quay.jpg", "image/jpeg", byte_size(data))
@@ -177,6 +193,19 @@ defmodule Storehouse.SignedTest do
       {:ok, late} = Storehouse.signed_url("2026/10/a.png", expires_in: -1)
       assert send(:get, late, opts).status == 403
       assert send(:get, String.replace(url, "a.png", "b.png"), opts).status == 403
+    end
+
+    test "a private store's file is never for a shared cache, nor past its URL" do
+      # Even with a public Cache-Control, meant for a CDN in front.
+      opts = FilePlug.init(private: true, cache_control: "public, max-age=31536000, immutable")
+
+      {:ok, url} = Storehouse.signed_url("2026/10/a.png", expires_in: 60)
+      [cache] = get_resp_header(send(:get, url, opts), "cache-control")
+      assert "private, max-age=" <> left = cache
+      assert String.to_integer(left) in 58..60
+
+      {:ok, url} = Storehouse.signed_url("2026/10/a.png", expires_in: 86_400)
+      assert get_resp_header(send(:get, url, opts), "cache-control") == ["private, max-age=3600"]
     end
 
     test "names a download, and never shows inline what a browser should not", %{public: opts} do

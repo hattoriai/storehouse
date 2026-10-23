@@ -5,7 +5,7 @@ defmodule Storehouse.Plug.Presign do
 
       # lib/my_app_web/router.ex, behind your authentication
       scope "/files" do
-        pipe_through [:api, :require_user]
+        pipe_through [:files, :require_user]  # the guide's, with its CSRF check
 
         forward "/presign", Storehouse.Plug.Presign,
           owner: &MyAppWeb.Files.owner/1,
@@ -31,7 +31,8 @@ defmodule Storehouse.Plug.Presign do
 
   The browser sends each file to its `url` with its `method` and exactly
   its `headers`, then gives the keys to `Storehouse.Plug.Register`. A body
-  that is not that JSON gives `400`, and a batch larger than `:max_items`
+  that is not that JSON gives `400`, one that is not `application/json`
+  `415` (a form of another site is never read), and a batch larger than `:max_items`
   `413`, with `{"error": code}`.
 
   ## Options
@@ -62,6 +63,7 @@ defmodule Storehouse.Plug.Presign do
       Batch.json(conn, 200, %{"uploads" => Enum.map(results, &Batch.result/1)})
     else
       {:error, :too_many} -> Batch.error(conn, 413, :too_many)
+      {:unsupported, conn} -> Batch.error(conn, 415, :unsupported_media_type)
       {:error, conn} -> Batch.error(conn, 400, :invalid_request)
     end
   end

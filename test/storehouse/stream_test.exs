@@ -29,8 +29,8 @@ defmodule Storehouse.StreamTest do
     %{root: root}
   end
 
-  defp upload(name, content, type) do
-    {:ok, view, _html} = live(build_conn(), "/stream")
+  defp upload(name, content, type, path \\ "/stream") do
+    {:ok, view, _html} = live(build_conn(), path)
     input = file_input(view, "#upload", :photos, [%{name: name, content: content, type: type}])
     result = render_upload(input, name)
     {view, result}
@@ -65,6 +65,21 @@ defmodule Storehouse.StreamTest do
     # The entry has an error, and no result.
     assert result =~ ~r/data-phx-error-refs="\d+"/
     assert root |> Path.join("**/*") |> Path.wildcard() |> Enum.filter(&File.regular?/1) == []
+  end
+
+  test "a file larger than the owner's room is stopped, and nothing of it stays", %{root: root} do
+    data = File.read!(Path.join(@fixtures, "harbour.jpg"))
+
+    # Said larger than the room at once, and found larger on the way.
+    for room <- [10, byte_size(data) - 1] do
+      {_view, result} = upload("harbour.jpg", data, "image/jpeg", "/stream?room=#{room}")
+      assert result == {:error, :writer_error}
+    end
+
+    assert root |> Path.join("**/*") |> Path.wildcard() |> Enum.filter(&File.regular?/1) == []
+
+    {view, _result} = upload("harbour.jpg", data, "image/jpeg", "/stream?room=#{byte_size(data)}")
+    assert render(view) =~ "harbour.jpg: image/jpeg 35367"
   end
 
   @tag :s3

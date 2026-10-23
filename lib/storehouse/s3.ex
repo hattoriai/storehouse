@@ -44,6 +44,11 @@ defmodule Storehouse.S3 do
       so a file never changes: `"public, max-age=31536000, immutable"`.
       The default is none, the bucket's own. A call's `:cache_control`
       takes its place (`Storehouse.store/2`).
+    * `:if_none_match` - whether an upload straight to the bucket is
+      signed with `If-None-Match: *`, so the bucket takes it only where no
+      file is: its URL cannot replace a file once it was checked. The
+      default is `true`; AWS S3, R2 and MinIO take it. Set it to `false`
+      for a store that refuses the header.
 
   Each file is stored with its checked content type, and with
   `Content-Disposition: attachment` for every type a browser should not
@@ -58,8 +63,12 @@ defmodule Storehouse.S3 do
 
       [{"AllowedOrigins": ["https://my-app.example.com"],
         "AllowedMethods": ["PUT"],
-        "AllowedHeaders": ["content-type", "content-disposition"],
+        "AllowedHeaders": ["content-type", "content-disposition", "if-none-match"],
         "MaxAgeSeconds": 3600}]
+
+  The URL writes only where no file is (`If-None-Match: *`): once the
+  file was checked (`Storehouse.verify_upload/2`), the same URL cannot
+  put other bytes in its place.
 
   An upload presigned with its checksum (`:checksum`) is signed with
   `x-amz-checksum-sha256` too, and the bucket refuses bytes that do not
@@ -230,6 +239,7 @@ defmodule Storehouse.S3 do
         %{"content-type" => type, "content-disposition" => disposition(type)}
         |> Map.merge(checksum_headers(meta[:checksum]))
         |> Map.merge(Map.new(cache_header(c, meta)))
+        |> Map.merge(once_header(c))
 
       # The size is signed too: the bucket takes the file of that size only.
       signed =
@@ -250,6 +260,10 @@ defmodule Storehouse.S3 do
       value -> [{"cache-control", value}]
     end
   end
+
+  # Only where no file is: the URL never replaces the file it put there.
+  defp once_header(c),
+    do: if(Keyword.get(c, :if_none_match, true), do: %{"if-none-match" => "*"}, else: %{})
 
   # With a checksum, the bucket takes only the bytes that have it.
   defp checksum_headers(nil), do: %{}
@@ -543,9 +557,13 @@ defmodule Storehouse.S3 do
       headers =
         if checksum = opts[:checksum], do: %{"x-amz-checksum-sha256" => checksum}, else: %{}
 
+      # With its size, the bucket takes a part of that size only.
+      length =
+        if bytes = opts[:bytes], do: [{"content-length", Integer.to_string(bytes)}], else: []
+
       signed =
         Signature.presign("PUT", uri, Keyword.get(opts, :expires_in, 3_600), credentials(c),
-          headers: Map.to_list(headers)
+          headers: Map.to_list(headers) ++ length
         )
 
       {:ok, %{method: "PUT", url: URI.to_string(signed), headers: headers}}
@@ -1024,10 +1042,8 @@ defmodule Storehouse.S3 do
   @doc false
   def __store__, do: {__MODULE__, config()}
 
-  # A signed request, with :httpc. A file's body is streamed from the disk.
+  # A signed request, with Req. A file's body is streamed from the disk.
   defp request(c, method, uri, headers, body) do
-    {:ok, _apps} = Application.ensure_all_started([:inets, :ssl])
-
     signed =
       Signature.sign_headers(
         method |> Atom.to_string() |> String.upcase(),
@@ -1036,68 +1052,27 @@ defmodule Storehouse.S3 do
         credentials(c)
       )
 
-    url = String.to_charlist(URI.to_string(uri))
+    # The host is the connection's; the size, the body's.
+    request_headers = for {k, v} <- signed, k not in ["host", "content-length"], do: {k, v}
 
     request_headers =
-      for {k, v} <- signed,
-          k not in ["host", "content-type", "content-length"],
-          do: {String.to_charlist(k), String.to_charlist(v)}
+      if List.keymember?(request_headers, "content-type", 0),
+        do: request_headers,
+        else: [{"content-type", "application/octet-stream"} | request_headers]
 
-    type =
-      signed
-      |> List.keyfind("content-type", 0)
-      |> then(&if &1, do: elem(&1, 1), else: "application/octet-stream")
-
-    request =
+    {request_headers, body} =
       case body do
+        # A PUT or POST without a body says so: a copy, a multipart start.
         nil when method in [:put, :post] ->
-          {url, request_headers, String.to_charlist(type), ""}
-
-        nil ->
-          {url, request_headers}
-
-        body when is_binary(body) ->
-          {url, request_headers, String.to_charlist(type), body}
+          {request_headers, ""}
 
         {:file, path, size} ->
-          {url, [{~c"content-length", Integer.to_charlist(size)} | request_headers],
-           String.to_charlist(type), {&stream_file/1, {path, nil}}}
+          {[{"content-length", Integer.to_string(size)} | request_headers], {:file, path}}
+
+        body ->
+          {request_headers, body}
       end
 
-    http_opts = [timeout: 60_000, connect_timeout: 10_000, ssl: ssl()]
-
-    case :httpc.request(method, request, http_opts, body_format: :binary) do
-      {:ok, {{_version, status, _reason}, headers, body}} ->
-        {:ok, status,
-         Enum.map(headers, fn {k, v} -> {String.downcase(to_string(k)), to_string(v)} end), body}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  # :httpc's body function: the file, a megabyte at a time.
-  defp stream_file({path, nil}) do
-    {:ok, file} = File.open(path, [:read, :binary])
-    stream_file({path, file})
-  end
-
-  defp stream_file({path, file}) do
-    case IO.binread(file, 1_048_576) do
-      data when is_binary(data) ->
-        {:ok, data, {path, file}}
-
-      _eof ->
-        File.close(file)
-        :eof
-    end
-  end
-
-  defp ssl do
-    [
-      verify: :verify_peer,
-      cacerts: :public_key.cacerts_get(),
-      customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]
-    ]
+    Storehouse.HTTP.request(method, URI.to_string(uri), request_headers, body)
   end
 end

@@ -49,6 +49,10 @@ defmodule Storehouse.Tus.Plug do
       file in a record, to send its key in a header.
     * `:expires_in` - seconds an upload has to finish. The default is a
       day.
+    * `:max_uploads` - the uploads one owner may have in progress at once:
+      another is refused with `429`. The default is 10. Those in progress
+      count against the owner's `:room` too, by their sizes. (With a
+      `:state` that has `c:Storehouse.Tus.State.owned/1`.)
     * `:part_bytes` - the parts of a multipart upload, at least 5 MiB. The
       default is 8 MiB.
     * `:dir` - the directory of the uploads to a store without multipart
@@ -80,7 +84,9 @@ defmodule Storehouse.Tus.Plug do
 
   @impl Plug
   def init(opts) do
-    {own, opts} = Keyword.split(opts, [:then, :expires_in, :part_bytes, :dir, :state])
+    {own, opts} =
+      Keyword.split(opts, [:then, :expires_in, :part_bytes, :dir, :state, :max_uploads])
+
     opts |> Batch.init([]) |> Keyword.merge(own)
   end
 
@@ -136,6 +142,7 @@ defmodule Storehouse.Tus.Plug do
 
     with {:ok, length} <- upload_length(conn),
          :ok <- allowed(type, length, batch),
+         :ok <- room_left(length, batch, opts),
          {:ok, upload} <- start(name, type, length, metadata, batch, opts) do
       state(opts).put(upload)
 
@@ -173,6 +180,26 @@ defmodule Storehouse.Tus.Plug do
     end
   end
 
+  # The owner's uploads in progress: no more than :max_uploads, and their
+  # sizes within its room with this one's.
+  defp room_left(length, batch, opts) do
+    state = state(opts)
+    owner = batch[:owner] && to_string(batch[:owner])
+
+    if owner && Code.ensure_loaded?(state) && function_exported?(state, :owned, 1) do
+      pending = state.owned(owner)
+      taken = pending |> Enum.map(& &1.length) |> Enum.sum()
+
+      cond do
+        length(pending) >= Keyword.get(opts, :max_uploads, 10) -> {:error, 429}
+        is_integer(batch[:room]) and length + taken > batch[:room] -> {:error, 413}
+        true -> :ok
+      end
+    else
+      :ok
+    end
+  end
+
   defp start(name, type, length, metadata, batch, opts) do
     adapter = Keyword.get_lazy(batch, :adapter, &Storehouse.adapter/0)
     id = Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
@@ -185,6 +212,8 @@ defmodule Storehouse.Tus.Plug do
       length: length,
       offset: 0,
       metadata: metadata,
+      # The store it goes to, which a sweep gives it up in.
+      adapter: adapter,
       expires_at: DateTime.add(DateTime.utc_now(), Keyword.get(opts, :expires_in, 86_400))
     }
 
@@ -430,7 +459,9 @@ defmodule Storehouse.Tus.Plug do
   def give_up(upload, state, opts) do
     case upload do
       %{mode: :multipart} ->
-        adapter = Keyword.get_lazy(opts, :adapter, &Storehouse.adapter/0)
+        adapter =
+          upload[:adapter] || Keyword.get_lazy(opts, :adapter, &Storehouse.adapter/0)
+
         adapter.multipart_abort(upload.key, upload.upload_id)
 
       %{mode: :file, path: path} ->

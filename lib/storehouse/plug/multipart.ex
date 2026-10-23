@@ -6,7 +6,7 @@ defmodule Storehouse.Plug.Multipart do
 
       # lib/my_app_web/router.ex, behind your authentication
       scope "/files" do
-        pipe_through [:api, :require_user]
+        pipe_through [:files, :require_user]  # the guide's, with its CSRF check
 
         forward "/multipart", Storehouse.Plug.Multipart,
           owner: &MyAppWeb.Files.owner/1,
@@ -18,24 +18,29 @@ defmodule Storehouse.Plug.Multipart do
   Each is a `POST` of JSON:
 
     * `start` - `{"name", "type", "bytes", "checksum"}`: `{"upload": {"key",
-      "upload_id", "part_bytes", "parts"}}`, or `{"existing": file}` for a
-      file the app has already.
-    * `sign` - `{"key", "upload_id", "parts": [{"number", "checksum"}]}`, up
-      to 1,000 parts, each with its SHA-256 in Base64: `{"parts": [{"number",
-      "method", "url", "headers"}]}`. The browser `PUT`s each part to its
-      `url` with exactly its `headers`.
-    * `list` - `{"key", "upload_id"}`: `{"parts": [{"number", "bytes",
-      "checksum"}]}`, those the store has, for a browser reloaded halfway.
-    * `complete` - `{"key", "upload_id", "bytes", "name"}`: `{"file": file}`
+      "upload_id", "part_bytes", "parts", "token"}}`, or `{"existing": file}`
+      for a file the app has already.
+    * `sign` - `{"key", "upload_id", "token", "parts": [{"number",
+      "checksum"}]}`, up to 1,000 parts, each with its SHA-256 in Base64:
+      `{"parts": [{"number", "method", "url", "headers"}]}`. The browser
+      `PUT`s each part to its `url` with exactly its `headers`, and the
+      part's size is signed: the store takes only that many bytes.
+    * `list` - `{"key", "upload_id", "token"}`: `{"parts": [{"number",
+      "bytes", "checksum"}]}`, those the store has, for a browser reloaded
+      halfway.
+    * `complete` - `{"key", "upload_id", "token", "name"}`: `{"file": file}`
       or `{"existing": file}`, checked as `Storehouse.Plug.Register` checks
       one; `{"error": "missing_parts"}` or `"wrong_size"` (and the upload
       stays) when the store does not have it all.
-    * `abort` - `{"key", "upload_id"}`: `{"ok": true}`.
+    * `abort` - `{"key", "upload_id", "token"}`: `{"ok": true}`.
 
-  A key of another owner's is refused with `403` and `{"error":
-  "not_owner"}`, so that no one signs or completes another's upload; a
-  body that is not the JSON above gives `400`, and a refusal of the file
-  `422`, with `{"error": code}`.
+  The token is the upload `start` signed (its key, its owner, its size and
+  its parts, with the endpoint's `secret_key_base`, for a week): a request
+  without the token of its upload is refused with `403` and `{"error":
+  "invalid_token"}`, so that no one signs, completes or gives up another's
+  upload, or one larger than it said. A body that is not the JSON above
+  gives `400`, a body that is not `application/json` `415`, and a refusal of
+  the file `422`, with `{"error": code}`.
 
   ## Options
 
@@ -62,6 +67,7 @@ defmodule Storehouse.Plug.Multipart do
     case body(conn) do
       {:ok, conn, body} -> act(action, conn, body, Batch.batch_opts(conn, opts))
       {:error, conn} -> Batch.error(conn, 400, :invalid_request)
+      {:unsupported, conn} -> Batch.error(conn, 415, :unsupported_media_type)
     end
   end
 
@@ -77,9 +83,10 @@ defmodule Storehouse.Plug.Multipart do
 
     case Storehouse.presign_multipart(name, body["type"], bytes, opts) do
       {:ok, upload} ->
-        Batch.json(conn, 200, %{
-          "upload" => Map.new(upload, fn {k, v} -> {Atom.to_string(k), v} end)
-        })
+        upload = Map.new(upload, fn {k, v} -> {Atom.to_string(k), v} end)
+        signed = upload |> Map.put("bytes", bytes) |> signed(opts)
+        token = Storehouse.Token.sign(Batch.secret!(opts), "multipart", signed)
+        Batch.json(conn, 200, %{"upload" => Map.put(upload, "token", token)})
 
       {:existing, file} ->
         Batch.json(conn, 200, %{"existing" => Storehouse.File.to_map(file)})
@@ -90,9 +97,10 @@ defmodule Storehouse.Plug.Multipart do
   end
 
   defp act("sign", conn, %{"parts" => parts} = body, opts) when is_list(parts) do
-    with {:ok, key, id} <- upload(body, opts),
+    with {:ok, key, id, started} <- upload(body, opts),
          {:ok, parts} <- parts(parts),
-         {:ok, signed} <- Storehouse.presign_parts(key, id, parts, opts) do
+         sizes = [bytes: started["bytes"], part_bytes: started["part_bytes"]],
+         {:ok, signed} <- Storehouse.presign_parts(key, id, parts, Keyword.merge(opts, sizes)) do
       Batch.json(conn, 200, %{
         "parts" => Enum.map(signed, &Map.new(&1, fn {k, v} -> {Atom.to_string(k), v} end))
       })
@@ -102,7 +110,7 @@ defmodule Storehouse.Plug.Multipart do
   end
 
   defp act("list", conn, body, opts) do
-    with {:ok, key, id} <- upload(body, opts),
+    with {:ok, key, id, _started} <- upload(body, opts),
          {:ok, parts} <- Storehouse.multipart_parts(key, id, opts) do
       Batch.json(conn, 200, %{
         "parts" => Enum.map(parts, &Map.new(&1, fn {k, v} -> {Atom.to_string(k), v} end))
@@ -112,17 +120,21 @@ defmodule Storehouse.Plug.Multipart do
     end
   end
 
-  defp act("complete", conn, %{"bytes" => bytes} = body, opts) when is_integer(bytes) do
+  # The size is the one start signed, never the browser's word.
+  defp act("complete", conn, body, opts) do
     opts = if is_binary(body["name"]), do: Keyword.put(opts, :name, body["name"]), else: opts
 
     case upload(body, opts) do
-      {:ok, key, id} -> completed(conn, Storehouse.complete_multipart(key, id, bytes, opts))
-      {:error, reason} -> refused(conn, reason)
+      {:ok, key, id, %{"bytes" => bytes}} ->
+        completed(conn, Storehouse.complete_multipart(key, id, bytes, opts))
+
+      {:error, reason} ->
+        refused(conn, reason)
     end
   end
 
   defp act("abort", conn, body, opts) do
-    with {:ok, key, id} <- upload(body, opts),
+    with {:ok, key, id, _started} <- upload(body, opts),
          :ok <- Storehouse.abort_multipart(key, id, opts) do
       Batch.json(conn, 200, %{"ok" => true})
     else
@@ -140,12 +152,25 @@ defmodule Storehouse.Plug.Multipart do
 
   defp completed(conn, {:error, reason}), do: refused(conn, reason)
 
-  # The upload a request names, when it is the owner's.
-  defp upload(%{"key" => key, "upload_id" => id}, opts) when is_binary(key) and is_binary(id) do
-    cond do
-      not Storehouse.valid_key?(key) -> {:error, :invalid_request}
-      opts[:owner] && not Storehouse.owns?(opts[:owner], key) -> {:error, :not_owner}
-      true -> {:ok, key, id}
+  # What the token of an upload signs: the upload, for its owner.
+  defp signed(upload, opts) do
+    upload
+    |> Map.take(~w(key upload_id bytes part_bytes parts))
+    |> Map.put("owner", opts[:owner])
+  end
+
+  # The upload a request names, when its token is the one start gave it,
+  # for this owner, with what start signed.
+  defp upload(%{"key" => key, "upload_id" => id} = body, opts)
+       when is_binary(key) and is_binary(id) do
+    owner = opts[:owner]
+
+    case Storehouse.Token.verify(Batch.secret!(opts), "multipart", body["token"]) do
+      {:ok, %{"key" => ^key, "upload_id" => ^id, "owner" => ^owner} = started} ->
+        {:ok, key, id, started}
+
+      _other ->
+        {:error, :invalid_token}
     end
   end
 
@@ -169,6 +194,7 @@ defmodule Storehouse.Plug.Multipart do
   defp refused(conn, :invalid_part), do: Batch.error(conn, 400, :invalid_part)
   defp refused(conn, :invalid_key), do: Batch.error(conn, 400, :invalid_request)
   defp refused(conn, :not_owner), do: Batch.error(conn, 403, :not_owner)
+  defp refused(conn, :invalid_token), do: Batch.error(conn, 403, :invalid_token)
   defp refused(conn, :not_supported), do: Batch.error(conn, 501, :not_supported)
   defp refused(conn, :enoent), do: Batch.error(conn, 404, :not_found)
   defp refused(conn, {:missing_parts, _numbers}), do: Batch.error(conn, 409, :missing_parts)
@@ -177,8 +203,12 @@ defmodule Storehouse.Plug.Multipart do
   defp refused(conn, reason) when is_atom(reason), do: Batch.error(conn, 422, reason)
   defp refused(conn, _reason), do: Batch.error(conn, 502, :upload_failed)
 
-  # The body: parsed by Plug.Parsers, or read here.
+  # The body, JSON only: parsed by Plug.Parsers, or read here.
   defp body(conn) do
+    if Batch.json_request?(conn), do: json_body(conn), else: {:unsupported, conn}
+  end
+
+  defp json_body(conn) do
     case conn.body_params do
       %Plug.Conn.Unfetched{} ->
         with {:ok, raw, conn} <- read_body(conn, length: 1_000_000),

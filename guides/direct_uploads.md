@@ -125,11 +125,16 @@ your app's origin to `PUT`, with the headers Storehouse signs:
   {
     "AllowedOrigins": ["https://my-app.example.com"],
     "AllowedMethods": ["PUT"],
-    "AllowedHeaders": ["content-type", "content-disposition"],
+    "AllowedHeaders": ["content-type", "content-disposition", "if-none-match"],
     "MaxAgeSeconds": 3600
   }
 ]
 ```
+
+Each upload is signed with `If-None-Match: *`: the bucket takes it only
+where no file is, so its URL, valid for ten minutes, cannot put other
+bytes in place of a file once it was checked. A store that refuses the
+header takes `if_none_match: false` in its config.
 
 Uploads presigned with a `:checksum` (see "The same file again" in the
 Stores guide) also send `x-amz-checksum-sha256` and

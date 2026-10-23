@@ -9,6 +9,7 @@ defmodule Storehouse.TusTest do
   alias Storehouse.Memory
   alias Storehouse.Plug.Presign
   alias Storehouse.Tus.Plug, as: TusPlug
+  alias Storehouse.Tus.State.ETS
 
   @fixtures Path.expand("../fixtures", __DIR__)
   @harbour File.read!(Path.join(@fixtures, "harbour.jpg"))
@@ -234,5 +235,69 @@ defmodule Storehouse.TusTest do
     task = Task.async(fn -> patch(opts, id, 0, "abc").status end)
     assert Task.await(task) == 423
     :global.del_lock(lock, [node()])
+  end
+
+  test "one owner's uploads in progress: at most :max_uploads, and within its room", %{
+    opts: opts
+  } do
+    limited =
+      Keyword.merge(opts,
+        max_uploads: 2,
+        room: 1_500,
+        batch: Keyword.delete(opts[:batch], :accept)
+      )
+
+    first = create(limited, 600)
+    _second = create(limited, 600)
+
+    # A third at once is refused, and so is one past the room the others left.
+    assert request(:post, "/", limited, [{"upload-length", "100"}]).status == 429
+    assert request(:delete, "/#{first}", limited).status == 204
+    assert request(:post, "/", limited, [{"upload-length", "1000"}]).status == 413
+    assert request(:post, "/", limited, [{"upload-length", "300"}]).status == 201
+
+    # Another owner's are its own.
+    conn =
+      conn(:post, "/", "")
+      |> put_req_header("tus-resumable", "1.0.0")
+      |> put_req_header("upload-length", "100")
+      |> assign(:owner, "accounts/8")
+
+    assert TusPlug.call(conn, limited).status == 201
+  end
+
+  defmodule Parts do
+    # A store of multipart uploads that says what was given up, and where.
+    def multipart_start(_key, _meta), do: {:ok, "u1"}
+
+    def multipart_put(_key, _id, n, body),
+      do: {:ok, %{number: n, etag: "e", bytes: byte_size(body)}}
+
+    def multipart_abort(key, id) do
+      send(:tus_sweep_test, {:aborted, key, id})
+      :ok
+    end
+  end
+
+  test "an expired upload is given up in the store it went to, and one that fails stops none" do
+    Process.register(self(), :tus_sweep_test)
+    # The app's own store is another one, with no multipart uploads.
+    opts = TusPlug.init(adapter: Parts, owner: "accounts/7", expires_in: -1)
+    id = create(opts, 10)
+
+    assert {:ok, 1} = Storehouse.Tus.sweep()
+    assert_received {:aborted, "accounts/7/" <> _, "u1"}
+    assert ETS.get(id) == nil
+
+    # One whose store raises: the sweep goes on, and so does the process.
+    broken = %{ETS.get(create(opts, 10)) | adapter: :no_such_store}
+    ETS.put(broken)
+    _other = create(opts, 10)
+    pid = Process.whereis(Storehouse.Tus)
+
+    assert {:ok, 2} = Storehouse.Tus.sweep()
+    assert_received {:aborted, _key, "u1"}
+    send(pid, :sweep)
+    assert Process.alive?(pid)
   end
 end
