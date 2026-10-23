@@ -69,17 +69,11 @@ Then, in a page:
 ```heex
 <img src={Storehouse.variant_url(@photo.image, :thumb)} width="320" height="320" alt="" />
 
-<img
-  src={Storehouse.variant_url(@photo.image, :photo, width: 1280)}
-  srcset={
-    Enum.map_join([640, 960, 1280, 1920, 2560], ", ", fn width ->
-      "#{Storehouse.variant_url(@photo.image, :photo, width: width)} #{width}w"
-    end)
-  }
-  sizes="(min-width: 60rem) 60rem, 100vw"
-  alt={@photo.caption}
-/>
+<Storehouse.Components.img file={@photo.image} preset={:photo}
+  sizes="(min-width: 60rem) 60rem, 100vw" alt={@photo.caption} />
 ```
+
+The second is a whole `srcset`, below.
 
 `Storehouse.variant_url/3` is the same every time, and costs nothing: it
 reads no store. The first request for a variant makes it: the plug
@@ -193,6 +187,98 @@ end
 
 `Storehouse.Renderer.Imgproxy.path/3` and `signed_path/2` build and sign
 imgproxy's path, for a renderer that wraps it.
+
+## Responsive images
+
+A preset with a ladder of widths gives every screen its size.
+`Storehouse.Responsive.resolve/3` makes what a page needs from it,
+reading no store:
+
+```elixir
+Storehouse.Responsive.resolve(file, :photo, sizes: "(min-width: 60rem) 60rem, 100vw")
+#=> %Storehouse.Responsive{
+#     src: "/variants/…/photo-1920-…",
+#     srcset: "/variants/…/photo-640-… 640w, /variants/…/photo-1280-… 1280w, /variants/…/photo-1920-… 1500w",
+#     sizes: "(min-width: 60rem) 60rem, 100vw",
+#     width: 1500, height: 1000,
+#     placeholder: "data:image/webp;base64,…", color: "#9a7b76", thumbhash: …, blurhash: …}
+```
+
+The `srcset` lists the ladder's widths below the original's, then the
+original's own width. A 1500-pixel photograph is never offered at 1920,
+and one wider than the ladder is offered at the ladder's widths. Each
+width is requested at its step of the ladder, or the next one up, so every
+photograph uses the same few sizes and a CDN keeps few copies. `width` and
+`height` are those of the largest, so the page keeps the room before the
+image arrives. The placeholder, colour and hashes come from the file's
+analysis, when it has them (see the analysis guide).
+
+It encodes as JSON, for an app with a JavaScript frontend:
+
+```elixir
+json(conn, %{photo: Storehouse.Responsive.resolve(photo.image, :photo)})
+```
+
+```jsx
+<img src={photo.src} srcSet={photo.srcset} sizes="(min-width: 60rem) 60rem, 100vw"
+  width={photo.width} height={photo.height}
+  style={{ background: `${photo.color} url(${photo.placeholder}) center / cover` }} />
+```
+
+In HEEx, `Storehouse.Components.img/1` renders it. It paints the
+placeholder and the colour under the image, and only a data URI of an
+image and a `#rrggbb` colour ever reach its style.
+
+### Choosing `sizes`
+
+`sizes` tells the browser how wide the photograph will be on the page
+before it has the CSS, so that it picks a size from the `srcset`.
+Describe the layout's slot for it, not the image, and give each slot
+of a layout its own:
+
+* a photograph across the page: `100vw`;
+* in a column of at most 60rem, else across: `(min-width: 60rem) 60rem, 100vw`;
+* one of two side by side above 48rem: `(min-width: 48rem) 50vw, 100vw`;
+* a thumbnail of a grid of four, in a page of 80rem:
+  `(min-width: 80rem) 20rem, 25vw`.
+
+A `sizes` larger than the slot only costs bytes; a smaller one shows a
+blurred photograph on a sharp screen. The browser multiplies it by the
+screen's density itself.
+
+### Warming
+
+A variant is made the first time it is requested, and for a large
+original that takes seconds. `Storehouse.Responsive.warm/3` requests each
+size once, before the first visitor does:
+
+* with a renderer in the app, it makes each size with `Storehouse.variant/3`;
+* with imgproxy or another service, it requests each URL with the
+  `Accept` of a current browser, so that the service renders the size and
+  the CDN in front keeps it.
+
+`warm_later/3` does the same out of the request, as a job of the app's
+runner, unique per file, without reading the original. Put it on a
+queue of its own, one image at a time, so that visitors never wait behind
+a batch of imports:
+
+```elixir
+# config/prod.exs: off by default, so development asks no image service.
+config :storehouse, Storehouse.Responsive, warm: true
+
+config :my_app, Oban, queues: [default: 10, warm: 1]
+```
+
+```elixir
+Storehouse.Responsive.warm_later(file, [:photo],
+  up_to: 3840,
+  runner: {Storehouse.Runner.Oban, queue: :warm}
+)
+```
+
+`up_to:` leaves the largest sizes, such as a lightbox's, to be made when
+they are requested. In a pipeline of steps run out of the request, the
+`Storehouse.Analyzer.Warm` step does the same.
 
 ## Deleted with their original
 
