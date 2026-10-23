@@ -62,12 +62,75 @@ defmodule Storehouse.S3 do
 
   @behaviour Storehouse.Adapter
 
+  @doc """
+  Defines a store of its own, with a config of its own: a second bucket
+  beside the first (public and private files, media on R2, files kept in
+  another region).
+
+      defmodule MyApp.PrivateFiles, do: use Storehouse.S3
+
+      config :storehouse, MyApp.PrivateFiles, bucket: "acme-private", region: "eu-west-1", …
+
+  The module is a `Storehouse.Adapter`: give it as `adapter:` (or a field's
+  `store:`, `Storehouse.Ecto.File`). With `otp_app: :my_app`, its config is
+  `config :my_app, MyApp.PrivateFiles, …`.
+  """
+  defmacro __using__(opts) do
+    otp_app = Keyword.get(opts, :otp_app, :storehouse)
+
+    quote do
+      @behaviour Storehouse.Adapter
+
+      @doc false
+      def config, do: Application.get_env(unquote(otp_app), __MODULE__, [])
+
+      @impl true
+      def put(key, path, meta), do: Storehouse.S3.put(config(), key, path, meta)
+      @impl true
+      def url(key), do: Storehouse.S3.url(config(), key)
+      @impl true
+      def delete(key), do: Storehouse.S3.delete(config(), key)
+      @impl true
+      def presign_upload(key, meta, opts),
+        do: Storehouse.S3.presign_upload(config(), key, meta, opts)
+
+      @impl true
+      def signed_url(key, opts), do: Storehouse.S3.signed_url(config(), key, opts)
+      @impl true
+      def read_head(key, bytes), do: Storehouse.S3.read_head(config(), key, bytes)
+      @impl true
+      def head(key), do: Storehouse.S3.head(config(), key)
+      @impl true
+      def read_range(key, first, last), do: Storehouse.S3.read_range(config(), key, first, last)
+      @impl true
+      def list(prefix), do: Storehouse.S3.list(config(), prefix)
+      @impl true
+      def delete_many(keys), do: Storehouse.S3.delete_many(config(), keys)
+      @impl true
+      def copy(from, to), do: Storehouse.S3.copy(config(), from, to)
+      @impl true
+      def checksum(key), do: Storehouse.S3.checksum(config(), key)
+      @impl true
+      def stream_open(key, meta), do: Storehouse.S3.stream_open(config(), key, meta)
+      # A stream carries its store's config.
+      @impl true
+      def stream_write(stream, data), do: Storehouse.S3.stream_write(stream, data)
+      @impl true
+      def stream_close(stream), do: Storehouse.S3.stream_close(stream)
+      @impl true
+      def stream_abort(stream), do: Storehouse.S3.stream_abort(stream)
+    end
+  end
+
   alias Storehouse.Check
   alias Storehouse.S3.{Parts, Signature}
 
   @impl Storehouse.Adapter
-  def put(key, path, meta) do
-    with {:ok, uri} <- object_uri(key),
+  def put(key, path, meta), do: put(config(), key, path, meta)
+
+  @doc false
+  def put(c, key, path, meta) do
+    with {:ok, uri} <- object_uri(c, key),
          {:ok, %File.Stat{size: size}} <- File.stat(path) do
       type = Map.get(meta, :content_type, "application/octet-stream")
 
@@ -86,8 +149,8 @@ defmodule Storehouse.S3 do
             else: []
           )
 
-      case request(:put, uri, headers, {:file, path, size}) do
-        {:ok, status, _headers, _body} when status in 200..299 -> {:ok, url(key)}
+      case request(c, :put, uri, headers, {:file, path, size}) do
+        {:ok, status, _headers, _body} when status in 200..299 -> {:ok, url(c, key)}
         {:ok, status, _headers, body} -> {:error, {:s3, status, body}}
         {:error, reason} -> {:error, reason}
       end
@@ -95,17 +158,23 @@ defmodule Storehouse.S3 do
   end
 
   @impl Storehouse.Adapter
-  def url(key) do
-    case config()[:public_url] do
+  def url(key), do: url(config(), key)
+
+  @doc false
+  def url(c, key) do
+    case c[:public_url] do
       base when is_binary(base) -> String.trim_trailing(base, "/") <> "/" <> key
-      nil -> key |> base_uri() |> URI.to_string()
+      nil -> c |> base_uri(key) |> URI.to_string()
     end
   end
 
   @impl Storehouse.Adapter
-  def delete(key) do
-    with {:ok, uri} <- object_uri(key) do
-      case request(:delete, uri, [], nil) do
+  def delete(key), do: delete(config(), key)
+
+  @doc false
+  def delete(c, key) do
+    with {:ok, uri} <- object_uri(c, key) do
+      case request(c, :delete, uri, [], nil) do
         {:ok, status, _headers, _body} when status in 200..299 or status == 404 -> :ok
         {:ok, status, _headers, body} -> {:error, {:s3, status, body}}
         {:error, reason} -> {:error, reason}
@@ -114,8 +183,11 @@ defmodule Storehouse.S3 do
   end
 
   @impl Storehouse.Adapter
-  def presign_upload(key, meta, opts) do
-    with {:ok, uri} <- object_uri(key) do
+  def presign_upload(key, meta, opts), do: presign_upload(config(), key, meta, opts)
+
+  @doc false
+  def presign_upload(c, key, meta, opts) do
+    with {:ok, uri} <- object_uri(c, key) do
       type = Map.fetch!(meta, :content_type)
 
       headers =
@@ -126,7 +198,7 @@ defmodule Storehouse.S3 do
 
       # The size is signed too: the bucket takes the file of that size only.
       signed =
-        Signature.presign("PUT", uri, Keyword.get(opts, :expires_in, 600), credentials(),
+        Signature.presign("PUT", uri, Keyword.get(opts, :expires_in, 600), credentials(c),
           headers:
             Map.to_list(headers) ++
               [{"content-length", Integer.to_string(Map.fetch!(meta, :bytes))}]
@@ -143,8 +215,11 @@ defmodule Storehouse.S3 do
     do: %{"x-amz-checksum-sha256" => checksum, "x-amz-sdk-checksum-algorithm" => "SHA256"}
 
   @impl Storehouse.Adapter
-  def signed_url(key, opts) do
-    with {:ok, uri} <- object_uri(key) do
+  def signed_url(key, opts), do: signed_url(config(), key, opts)
+
+  @doc false
+  def signed_url(c, key, opts) do
+    with {:ok, uri} <- object_uri(c, key) do
       query =
         case disposition_param(opts) do
           nil -> nil
@@ -156,7 +231,7 @@ defmodule Storehouse.S3 do
           "GET",
           %{uri | query: query},
           Keyword.get(opts, :expires_in, 300),
-          credentials()
+          credentials(c)
         )
 
       {:ok, URI.to_string(signed)}
@@ -164,9 +239,12 @@ defmodule Storehouse.S3 do
   end
 
   @impl Storehouse.Adapter
-  def read_head(key, bytes) do
-    with {:ok, uri} <- object_uri(key) do
-      case request(:get, uri, [{"range", "bytes=0-#{bytes - 1}"}], nil) do
+  def read_head(key, bytes), do: read_head(config(), key, bytes)
+
+  @doc false
+  def read_head(c, key, bytes) do
+    with {:ok, uri} <- object_uri(c, key) do
+      case request(c, :get, uri, [{"range", "bytes=0-#{bytes - 1}"}], nil) do
         {:ok, 206, headers, body} ->
           {:ok, body, total(headers, byte_size(body))}
 
@@ -190,9 +268,12 @@ defmodule Storehouse.S3 do
   end
 
   @impl Storehouse.Adapter
-  def head(key) do
-    with {:ok, uri} <- object_uri(key) do
-      case request(:head, uri, [{"x-amz-checksum-mode", "ENABLED"}], nil) do
+  def head(key), do: head(config(), key)
+
+  @doc false
+  def head(c, key) do
+    with {:ok, uri} <- object_uri(c, key) do
+      case request(c, :head, uri, [{"x-amz-checksum-mode", "ENABLED"}], nil) do
         {:ok, 200, headers, _body} ->
           {:ok,
            %{
@@ -214,9 +295,12 @@ defmodule Storehouse.S3 do
   end
 
   @impl Storehouse.Adapter
-  def read_range(key, first, last) when first >= 0 and last >= first do
-    with {:ok, uri} <- object_uri(key) do
-      case request(:get, uri, [{"range", "bytes=#{first}-#{last}"}], nil) do
+  def read_range(key, first, last), do: read_range(config(), key, first, last)
+
+  @doc false
+  def read_range(c, key, first, last) when first >= 0 and last >= first do
+    with {:ok, uri} <- object_uri(c, key) do
+      case request(c, :get, uri, [{"range", "bytes=#{first}-#{last}"}], nil) do
         {:ok, 206, _headers, body} ->
           {:ok, body}
 
@@ -245,18 +329,21 @@ defmodule Storehouse.S3 do
 
   # A page of ListObjectsV2 at a time, as the stream is taken.
   @impl Storehouse.Adapter
-  def list(prefix) do
-    {:ok, Stream.resource(fn -> :first end, &list_page(prefix, &1), fn _token -> :ok end)}
+  def list(prefix), do: list(config(), prefix)
+
+  @doc false
+  def list(c, prefix) do
+    {:ok, Stream.resource(fn -> :first end, &list_page(c, prefix, &1), fn _token -> :ok end)}
   end
 
-  defp list_page(_prefix, :done), do: {:halt, :done}
+  defp list_page(_c, _prefix, :done), do: {:halt, :done}
 
-  defp list_page(prefix, token) do
+  defp list_page(c, prefix, token) do
     params =
       %{"list-type" => "2", "prefix" => prefix}
       |> then(&if token == :first, do: &1, else: Map.put(&1, "continuation-token", token))
 
-    case request(:get, query(bucket_uri(), params), [], nil) do
+    case request(c, :get, query(bucket_uri(c), params), [], nil) do
       {:ok, 200, _headers, body} ->
         {listed(body), next_token(body)}
 
@@ -309,9 +396,12 @@ defmodule Storehouse.S3 do
 
   # DeleteObjects, quietly: the answer names only the keys not deleted.
   @impl Storehouse.Adapter
-  def delete_many([]), do: :ok
+  def delete_many(keys), do: delete_many(config(), keys)
 
-  def delete_many(keys) when length(keys) <= 1_000 do
+  @doc false
+  def delete_many(_c, []), do: :ok
+
+  def delete_many(c, keys) when length(keys) <= 1_000 do
     body =
       "<Delete><Quiet>true</Quiet>" <>
         Enum.map_join(keys, "", &"<Object><Key>#{escape(&1)}</Key></Object>") <>
@@ -322,7 +412,7 @@ defmodule Storehouse.S3 do
       {"content-md5", Base.encode64(:crypto.hash(:md5, body))}
     ]
 
-    case request(:post, query(bucket_uri(), %{"delete" => ""}), headers, body) do
+    case request(c, :post, query(bucket_uri(c), %{"delete" => ""}), headers, body) do
       {:ok, 200, _headers, answer} ->
         case Regex.scan(~r{<Error>.*?<Key>(.*?)</Key>.*?</Error>}s, answer) do
           [] ->
@@ -340,7 +430,7 @@ defmodule Storehouse.S3 do
     end
   end
 
-  defp bucket_uri, do: %{base_uri("") | query: nil}
+  defp bucket_uri(c), do: %{base_uri(c, "") | query: nil}
 
   defp header(headers, name, default) do
     case List.keyfind(headers, name, 0) do
@@ -359,10 +449,13 @@ defmodule Storehouse.S3 do
   @in_flight 2
 
   @impl Storehouse.Adapter
-  def stream_open(key, meta) do
-    with {:ok, uri} <- object_uri(key) do
+  def stream_open(key, meta), do: stream_open(config(), key, meta)
+
+  @doc false
+  def stream_open(c, key, meta) do
+    with {:ok, uri} <- object_uri(c, key) do
       type = Map.get(meta, :content_type, "application/octet-stream")
-      part_size = max(Keyword.get(config(), :part_size, 8 * 1_048_576), @min_part)
+      part_size = max(Keyword.get(c, :part_size, 8 * 1_048_576), @min_part)
 
       {:ok,
        %{
@@ -375,7 +468,8 @@ defmodule Storehouse.S3 do
          upload_id: nil,
          part: 0,
          parts: [],
-         sender: nil
+         sender: nil,
+         config: c
        }}
     end
   end
@@ -388,16 +482,22 @@ defmodule Storehouse.S3 do
 
   @impl Storehouse.Adapter
   def stream_close(%{upload_id: nil} = stream) do
+    c = stream.config
     body = IO.iodata_to_binary(stream.buffer)
 
     headers =
       object_headers(stream.type) ++
         [{"x-amz-checksum-sha256", Base.encode64(Signature.sha256(body))}]
 
-    case request(:put, stream.uri, headers, body) do
-      {:ok, status, _headers, _body} when status in 200..299 -> {:ok, url(stream.key)}
-      {:ok, status, _headers, body} -> {:error, {:s3, status, body}}
-      {:error, reason} -> {:error, reason}
+    case request(c, :put, stream.uri, headers, body) do
+      {:ok, status, _headers, _body} when status in 200..299 ->
+        {:ok, url(stream.config, stream.key)}
+
+      {:ok, status, _headers, body} ->
+        {:error, {:s3, status, body}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -406,7 +506,7 @@ defmodule Storehouse.S3 do
          {:ok, parts} <- Parts.finish(stream.sender),
          :ok <- complete(%{stream | parts: parts}) do
       Parts.stop(stream.sender)
-      {:ok, url(stream.key)}
+      {:ok, url(stream.config, stream.key)}
     else
       {:error, reason} ->
         stream_abort(stream)
@@ -416,10 +516,11 @@ defmodule Storehouse.S3 do
 
   @impl Storehouse.Adapter
   def stream_abort(stream) do
+    c = stream.config
     if stream.sender, do: Parts.stop(stream.sender)
 
     if stream.upload_id do
-      _result = request(:delete, query(stream.uri, %{"uploadId" => stream.upload_id}), [], nil)
+      _result = request(c, :delete, query(stream.uri, %{"uploadId" => stream.upload_id}), [], nil)
     end
 
     :ok
@@ -441,9 +542,10 @@ defmodule Storehouse.S3 do
   end
 
   defp start_multipart(%{upload_id: nil} = stream) do
+    c = stream.config
     headers = object_headers(stream.type) ++ [{"x-amz-checksum-algorithm", "SHA256"}]
 
-    case request(:post, query(stream.uri, %{"uploads" => ""}), headers, nil) do
+    case request(c, :post, query(stream.uri, %{"uploads" => ""}), headers, nil) do
       {:ok, 200, _headers, body} ->
         case Regex.run(~r{<UploadId>([^<]+)</UploadId>}, body) do
           [_, id] ->
@@ -466,12 +568,13 @@ defmodule Storehouse.S3 do
   defp start_multipart(stream), do: {:ok, stream}
 
   defp upload_part(stream, n, body) do
+    c = stream.config
     checksum = Base.encode64(Signature.sha256(body))
 
     uri =
       query(stream.uri, %{"partNumber" => Integer.to_string(n), "uploadId" => stream.upload_id})
 
-    case request(:put, uri, [{"x-amz-checksum-sha256", checksum}], body) do
+    case request(c, :put, uri, [{"x-amz-checksum-sha256", checksum}], body) do
       {:ok, 200, headers, _body} ->
         {_name, etag} = List.keyfind(headers, "etag", 0, {"etag", ""})
         {:ok, {n, etag, checksum}}
@@ -485,6 +588,8 @@ defmodule Storehouse.S3 do
   end
 
   defp complete(stream) do
+    c = stream.config
+
     parts =
       Enum.map_join(stream.parts, "", fn {n, etag, checksum} ->
         "<Part><PartNumber>#{n}</PartNumber><ETag>#{escape(etag)}</ETag><ChecksumSHA256>#{checksum}</ChecksumSHA256></Part>"
@@ -494,7 +599,7 @@ defmodule Storehouse.S3 do
     uri = query(stream.uri, %{"uploadId" => stream.upload_id})
 
     # As a copy, a completion can fail after its 200.
-    case request(:post, uri, [{"content-type", "application/xml"}], body) do
+    case request(c, :post, uri, [{"content-type", "application/xml"}], body) do
       {:ok, 200, _headers, response} ->
         if response =~ "<Error>", do: {:error, {:s3, 200, response}}, else: :ok
 
@@ -516,15 +621,18 @@ defmodule Storehouse.S3 do
       |> String.replace(">", "&gt;")
 
   @impl Storehouse.Adapter
-  def copy(from, to) do
-    with {:ok, _from} <- object_uri(from),
-         {:ok, uri} <- object_uri(to) do
+  def copy(from, to), do: copy(config(), from, to)
+
+  @doc false
+  def copy(c, from, to) do
+    with {:ok, _from} <- object_uri(c, from),
+         {:ok, uri} <- object_uri(c, to) do
       source =
-        "/#{Keyword.fetch!(config(), :bucket)}/" <>
+        "/#{Keyword.fetch!(c, :bucket)}/" <>
           Enum.map_join(String.split(from, "/"), "/", &Signature.encode/1)
 
       # A copy can fail after its 200: the error is then in the body.
-      case request(:put, uri, [{"x-amz-copy-source", source}], nil) do
+      case request(c, :put, uri, [{"x-amz-copy-source", source}], nil) do
         {:ok, 200, _headers, body} ->
           error_in_body(body)
 
@@ -543,9 +651,12 @@ defmodule Storehouse.S3 do
   defp error_in_body(body), do: if(body =~ "<Error>", do: {:error, {:s3, 200, body}}, else: :ok)
 
   @impl Storehouse.Adapter
-  def checksum(key) do
-    with {:ok, uri} <- object_uri(key) do
-      case request(:head, uri, [{"x-amz-checksum-mode", "ENABLED"}], nil) do
+  def checksum(key), do: checksum(config(), key)
+
+  @doc false
+  def checksum(c, key) do
+    with {:ok, uri} <- object_uri(c, key) do
+      case request(c, :head, uri, [{"x-amz-checksum-mode", "ENABLED"}], nil) do
         {:ok, 200, headers, _body} ->
           {:ok, headers |> List.keyfind("x-amz-checksum-sha256", 0) |> then(&(&1 && elem(&1, 1)))}
 
@@ -586,12 +697,12 @@ defmodule Storehouse.S3 do
     end
   end
 
-  defp object_uri(key) do
-    if Storehouse.valid_key?(key), do: {:ok, base_uri(key)}, else: {:error, :invalid_key}
+  defp object_uri(c, key) do
+    if Storehouse.valid_key?(key), do: {:ok, base_uri(c, key)}, else: {:error, :invalid_key}
   end
 
-  defp base_uri(key) do
-    config = config()
+  defp base_uri(c, key) do
+    config = c
     bucket = Keyword.fetch!(config, :bucket)
 
     endpoint =
@@ -608,8 +719,8 @@ defmodule Storehouse.S3 do
       else: %{endpoint | host: "#{bucket}.#{endpoint.host}", path: "#{base}/#{path}"}
   end
 
-  defp credentials do
-    config = config()
+  defp credentials(c) do
+    config = c
 
     %{
       access_key_id: Keyword.fetch!(config, :access_key_id),
@@ -619,10 +730,12 @@ defmodule Storehouse.S3 do
     }
   end
 
-  defp config, do: Application.get_env(:storehouse, __MODULE__, [])
+  @doc false
+  # This store's config; a store of `use Storehouse.S3` has its own.
+  def config, do: Application.get_env(:storehouse, __MODULE__, [])
 
   # A signed request, with :httpc. A file's body is streamed from the disk.
-  defp request(method, uri, headers, body) do
+  defp request(c, method, uri, headers, body) do
     {:ok, _apps} = Application.ensure_all_started([:inets, :ssl])
 
     signed =
@@ -630,7 +743,7 @@ defmodule Storehouse.S3 do
         method |> Atom.to_string() |> String.upcase(),
         uri,
         headers,
-        credentials()
+        credentials(c)
       )
 
     url = String.to_charlist(URI.to_string(uri))

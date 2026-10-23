@@ -82,6 +82,13 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   `presign_upload/4`'s `:checksum` (hex or Base64,
   `Storehouse.claimed_checksum/1`) signs the upload with it: S3, the local
   plug and `Storehouse.Memory` take only those bytes.
+- Several stores: `use Storehouse.S3` and `use Storehouse.Local` define a
+  store of the app's own, with its config under its name (or another
+  app's, `otp_app:`), usable wherever a store is (`adapter:`). An Ecto
+  field's `store:` (`Storehouse.Ecto.File` is now a parameterized type)
+  makes its files permanent, deletes them and analyzes them there;
+  `Storehouse.Ecto.store/2`. `Storehouse.Local.Plug`'s `:store` serves a
+  second local store.
 - Uploads from any client: `Storehouse.Batch.presign/2` and `register/2`
   sign and check a batch of uploads straight to the store, one result per
   file (`{:ok, _}`, `{:existing, file}` or `{:error, code}`), the room

@@ -31,6 +31,10 @@ if url = System.get_env("DATABASE_URL") do
     photos jsonb[] NOT NULL DEFAULT '{}'
   )
   """)
+
+  StorehouseTest.Repo.query!(
+    "ALTER TABLE storehouse_users ADD COLUMN IF NOT EXISTS invoice jsonb"
+  )
 end
 
 {:ok, _memory} = Storehouse.Memory.start_link()
