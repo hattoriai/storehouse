@@ -128,7 +128,14 @@ defmodule Storehouse do
   def store(path, opts \\ []) when is_binary(path) do
     name = clean_name(Keyword.get_lazy(opts, :name, fn -> Path.basename(path) end))
     adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
-    span(:store, %{name: name, adapter: adapter}, fn -> do_store(path, name, adapter, opts) end)
+
+    with {:ok, file} <-
+           span(:store, %{name: name, adapter: adapter}, fn ->
+             do_store(path, name, adapter, opts)
+           end) do
+      Storehouse.Notify.notify(:stored, %{file: file}, opts)
+      analyze_stored(file, path, adapter, opts)
+    end
   end
 
   defp do_store(path, name, adapter, opts) do
@@ -159,16 +166,25 @@ defmodule Storehouse do
         metadata: metadata
       }
 
-      file
-      |> preview(path, Keyword.get(opts, :preview))
-      |> analyze_stored(path, adapter, Keyword.get(opts, :analyze, []))
+      {:ok, preview(file, path, Keyword.get(opts, :preview))}
     end
   end
 
-  defp analyze_stored(file, _path, _adapter, []), do: {:ok, file}
+  # The analysis store/2 is asked for, from the path it stored.
+  defp analyze_stored(file, path, adapter, opts) do
+    case Keyword.get(opts, :analyze, []) do
+      [] -> {:ok, file}
+      steps -> analyzed(file, steps, Keyword.merge(opts, path: path, adapter: adapter))
+    end
+  end
 
-  defp analyze_stored(file, path, adapter, steps),
-    do: Storehouse.Analyzer.run(file, steps, path: path, adapter: adapter)
+  # The steps, then :analyzed told, when some ran.
+  defp analyzed(file, steps, opts) do
+    with {:ok, file, ran} <- Storehouse.Analyzer.run(file, steps, opts) do
+      if ran != [], do: Storehouse.Notify.notify(:analyzed, %{file: file, steps: ran}, opts)
+      {:ok, file}
+    end
+  end
 
   # The metadata a new file starts with.
   defp initial_metadata(opts),
@@ -375,9 +391,13 @@ defmodule Storehouse do
   def verify_upload(key, opts \\ []) do
     adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
 
-    span(:verify_upload, %{key: key, adapter: adapter}, fn ->
-      do_verify_upload(key, adapter, opts)
-    end)
+    with {:ok, file} <-
+           span(:verify_upload, %{key: key, adapter: adapter}, fn ->
+             do_verify_upload(key, adapter, opts)
+           end) do
+      Storehouse.Notify.notify(:stored, %{file: file}, opts)
+      {:ok, file}
+    end
   end
 
   defp do_verify_upload(key, adapter, opts) do
@@ -655,7 +675,7 @@ defmodule Storehouse do
           {:ok, Storehouse.File.t()} | {:error, term()}
   def analyze(%Storehouse.File{} = file, steps, opts \\ []) when is_list(steps) do
     adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
-    Storehouse.Analyzer.run(file, steps, Keyword.put(opts, :adapter, adapter))
+    analyzed(file, steps, Keyword.put(opts, :adapter, adapter))
   end
 
   @doc """
@@ -688,7 +708,9 @@ defmodule Storehouse do
     {module, function, args} = Keyword.fetch!(opts, :then)
     true = is_atom(module) and is_atom(function) and is_list(args)
     adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
-    later = opts |> Keyword.take([:then, :force, :max_bytes]) |> Keyword.put(:adapter, adapter)
+
+    later =
+      opts |> Keyword.take([:then, :force, :max_bytes, :notify]) |> Keyword.put(:adapter, adapter)
 
     case Keyword.get(opts, :runner, :task) do
       :task -> Storehouse.Tasks.run(fn -> analyze_now(file, steps, later) end)
@@ -715,8 +737,10 @@ defmodule Storehouse do
   def analyze_now(file, steps, opts) do
     {module, function, args} = Keyword.fetch!(opts, :then)
 
-    with {:ok, file} <- analyze(file, steps, opts) do
+    # Told once the app's function has the results: saved, with Ecto.
+    with {:ok, file, ran} <- Storehouse.Analyzer.run(file, steps, opts) do
       _result = apply(module, function, [file | args])
+      if ran != [], do: Storehouse.Notify.notify(:analyzed, %{file: file, steps: ran}, opts)
       :ok
     end
   end
@@ -913,7 +937,10 @@ defmodule Storehouse do
   @spec delete(Storehouse.Adapter.key(), keyword()) :: :ok | {:error, term()}
   def delete(key, opts \\ []) do
     adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
-    span(:delete, %{key: key, adapter: adapter}, fn -> adapter.delete(key) end)
+
+    with :ok <- span(:delete, %{key: key, adapter: adapter}, fn -> adapter.delete(key) end) do
+      Storehouse.Notify.notify(:deleted, %{key: key}, opts)
+    end
   end
 
   @doc """
@@ -962,11 +989,17 @@ defmodule Storehouse do
   def delete_prefix(prefix, opts \\ []) when is_binary(prefix) do
     adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
 
-    span(:delete_prefix, %{prefix: prefix, adapter: adapter}, fn ->
-      with {:ok, entries} <- list(prefix, adapter: adapter) do
-        entries |> Stream.map(& &1.key) |> delete_keys(adapter)
-      end
-    end)
+    result =
+      span(:delete_prefix, %{prefix: prefix, adapter: adapter}, fn ->
+        with {:ok, entries} <- list(prefix, adapter: adapter) do
+          entries |> Stream.map(& &1.key) |> delete_keys(adapter)
+        end
+      end)
+
+    with {:ok, count} <- result do
+      Storehouse.Notify.notify(:deleted, %{prefix: prefix, count: count}, opts)
+      {:ok, count}
+    end
   end
 
   @doc false

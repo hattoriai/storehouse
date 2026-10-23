@@ -85,6 +85,9 @@ It gives your app:
   pages) run on a stored file, at once or out of the request, in a
   process of your app's or in Oban, their results kept in its metadata
   and saved in its record's column;
+* **what happens to files, as it happens**: a file stored, its analysis
+  done or failed, a file deleted, told to a function of yours or
+  broadcast on your app's PubSub, on a topic you choose (an account's);
 * **metadata of your own** on each file (a caption, a credit), kept in
   its column and sent in its JSON, apart from what analysis reads from
   the file, which stays out of the JSON unless you ask for it;
@@ -236,8 +239,6 @@ another library is welcome as an issue.
   made once however many ask for it at the same time, across a cluster.
 * **Previews and analysis**: a PDF's first page, a video's poster, its
   length and size, audio; metadata of the app's own, read again later.
-* **Live progress beyond the upload**: the versions being made, a video
-  being read, for everyone who sees the file (PubSub).
 * **Cleanup of unused files**: the files no record uses any more, found
   by comparing the app's records with the store.
 * **Resumable uploads** that survive a reconnect (and the tus protocol),

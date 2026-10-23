@@ -54,6 +54,13 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   `:analyze`, save the results in the record's column. A span per step,
   `[:storehouse, :analyze, ...]`. `Storehouse.Analyzer.Size`, a step that
   asks the store a file's real size and type.
+- What happens to files, told as it happens (`Storehouse.Notify`): `:stored`
+  (`store/2`, `verify_upload/2`), `:analyzed` (with the steps that ran;
+  later analysis once the app's `:then` has it), `:failed` (a step, with
+  why) and `:deleted` (a key, or a prefix and its count), to the app's
+  `config :storehouse, notify: {module, function, args}`, or a call's
+  `notify:`. `Storehouse.Notify.PubSub` broadcasts them on the app's
+  `Phoenix.PubSub`, on a topic of the app's.
 
 ### Changed
 

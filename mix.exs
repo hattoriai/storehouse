@@ -113,6 +113,7 @@ defmodule Storehouse.MixProject do
           Storehouse.Oban.Analyze
         ],
         Cleanup: [Storehouse.Cleaner],
+        Events: [Storehouse.Notify, Storehouse.Notify.PubSub],
         Tests: [Storehouse.Memory, Storehouse.Test],
         "Private files": [Storehouse.Redirect],
         LiveView: [Storehouse.Live, Storehouse.Live.Writer],
