@@ -16,6 +16,21 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   store fails halfway) and `Storehouse.download/3` (to a path). The
   optional adapter callbacks `head/1` and `read_range/3`
   (`Storehouse.Local`, `Storehouse.S3`), and telemetry spans for each.
+- Cleanup: `Storehouse.list/2` (the files under a prefix, a page at a
+  time) and `Storehouse.delete_prefix/2` (a thousand at a time, with S3's
+  DeleteObjects), with the optional adapter callbacks `list/1` and
+  `delete_many/1`. `Storehouse.delete_later/2` and
+  `Storehouse.delete_prefix_later/2` queue deletions in
+  `Storehouse.Cleaner`, a process of the app's that tries them again until
+  the store answers, and sweeps the temporary files older than a day on
+  stores with no lifecycle rules (`:sweep`, one node of a cluster at a
+  time; `Storehouse.Cleaner.sweep/1` at once).
+
+### Changed
+
+- `Storehouse.Ecto.delete_files/2` (and so `update/3` and `delete/3`)
+  deletes through `Storehouse.delete_later/2`: retried by the cleaner when
+  it runs, at once as before when it does not.
 
 ## [0.1.0]
 

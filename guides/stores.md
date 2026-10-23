@@ -271,6 +271,45 @@ give the tools a time limit.
 ## Deleted files
 
 Storehouse does not know which of your records use a file. When one goes,
-delete its file with `Storehouse.delete/2` (or let a job compare your
-records with the store). Cleanup of the files nothing uses is on the
-roadmap.
+delete its file with `Storehouse.delete/2`, or with
+`Storehouse.delete_later/2`, which tries again until the store answers
+when `Storehouse.Cleaner` runs:
+
+```elixir
+# lib/my_app/application.ex
+children = [
+  MyApp.Repo,
+  {Storehouse.Cleaner, sweep: [max_age: 86_400]},
+  MyAppWeb.Endpoint
+]
+```
+
+The cleaner keeps its queue in memory: a deletion not done when the app
+stops is not done. For deletions that must outlive a deploy, call
+`Storehouse.delete/2` from an Oban job.
+
+### Many files at once
+
+Keys under a prefix go together: an account's (`"accounts/42/"`, with the
+`:key` option above), every version of a file. `Storehouse.list/2` gives
+them, a page at a time, and `Storehouse.delete_prefix/2` deletes them, a
+thousand at a time on S3:
+
+```elixir
+{:ok, files} = Storehouse.list("accounts/42/")
+Enum.sum_by(files, & &1.bytes)
+
+{:ok, count} = Storehouse.delete_prefix("accounts/42/")
+:ok = Storehouse.delete_prefix_later("accounts/42/")
+```
+
+An empty prefix, or `"/"`, is refused: nothing deletes a whole store.
+
+### Temporary files never saved
+
+A bucket's lifecycle rule deletes the files under the temporary prefix
+(see the Ecto guide). The local disk, and a store with no lifecycle
+rules, has the cleaner's `:sweep`: every hour, on one node of a cluster,
+it deletes the temporary files older than `:max_age` seconds.
+`Storehouse.Cleaner.sweep/1` does the same at once, from a task or a job
+of yours.

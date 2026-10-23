@@ -90,8 +90,16 @@ bucket deletes it there after a day, with no job of yours:
 
 On AWS, in the bucket's management; on R2, its object lifecycle rules; on
 LocalStack, `awslocal s3api put-bucket-lifecycle-configuration`. With
-`Storehouse.Local`, delete the directory's old files with a job of yours
-(cleanup is on the roadmap).
+`Storehouse.Local` (or a store with no lifecycle rules), let
+`Storehouse.Cleaner` sweep them:
+
+```elixir
+children = [
+  MyApp.Repo,
+  {Storehouse.Cleaner, sweep: [max_age: 86_400]},
+  MyAppWeb.Endpoint
+]
+```
 
 Making a file permanent can run again: a save that rolled back after it,
 tried again with the same upload, finds the permanent file there.
@@ -102,7 +110,9 @@ tried again with the same upload, finds the permanent file there.
 longer has (replaced, or removed with `put_file(changeset, :avatar,
 nil)`); `Storehouse.Ecto.delete/3` deletes the record, then its files.
 Deleted only once the database has the change: a save that fails leaves
-every file where it was.
+every file where it was. With `Storehouse.Cleaner` in the app's
+supervision tree, a deletion the store fails is tried again
+(`Storehouse.delete_later/2`); without it, the files are deleted at once.
 
 Inside a transaction of yours, they are not deleted (the transaction
 could still roll back): delete them after it commits.

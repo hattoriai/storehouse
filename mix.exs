@@ -100,6 +100,7 @@ defmodule Storehouse.MixProject do
       groups_for_modules: [
         Files: [Storehouse, Storehouse.File, Storehouse.Check, Storehouse.ReadError],
         Stores: [Storehouse.Adapter, Storehouse.Local, Storehouse.Local.Plug, Storehouse.S3],
+        Cleanup: [Storehouse.Cleaner],
         "Private files": [Storehouse.Redirect],
         LiveView: [Storehouse.Live, Storehouse.Live.Writer],
         Ecto: [Storehouse.Ecto, Storehouse.Ecto.File]
