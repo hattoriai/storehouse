@@ -1,0 +1,515 @@
+defmodule Storehouse do
+  @moduledoc """
+  Files for Phoenix: a file checked by its bytes (`Storehouse.Check`),
+  stored under a new, safe key through a store of the app's
+  (`Storehouse.Adapter`: the local disk, S3, …), and served safely
+  (`Storehouse.Local.Plug`).
+
+      {:ok, file} = Storehouse.store("priv/seeds/palette.png")
+      file.url
+      #=> "/uploads/2026/10/0b6…-palette.png"
+
+  `store/2` gives a `Storehouse.File`, which the app keeps (its key, URL,
+  name, type, size, and an image's width and height). A LiveView upload
+  goes the same way, with `Storehouse.Live.consume/3`; a file at an
+  address of a host the app allows, with `fetch/2`.
+
+  ## The store
+
+      config :storehouse, adapter: Storehouse.Local
+      config :storehouse, Storehouse.Local, root: "/var/lib/my_app/uploads"
+
+  `Storehouse.Local` (the default) keeps the files on the local disk; an
+  app writes its own adapter for S3 or another store (see
+  `Storehouse.Adapter`). Each call takes `adapter:` too.
+
+  ## Keys
+
+  A key is a relative path with segments of ASCII letters, digits, `.`,
+  `-` and `_`, separated by `/`. A segment is never `.` or `..`. `key/2`
+  makes a new key in the form `yyyy/mm/<uuid>-<safe name><extension>`.
+  The extension comes from the checked content type
+  (`Storehouse.Check.extension/1`), never from the client's file name, so
+  a key never ends in `.html` or `.svg`. An adapter refuses a key that
+  `valid_key?/1` refuses.
+  """
+
+  require Logger
+
+  alias Storehouse.Check
+
+  @max_name 100
+  @max_display_name 200
+  @max_key 255
+  @max_redirects 3
+  @segment ~r/\A[A-Za-z0-9._\-]+\z/
+
+  @doc """
+  Returns the configured adapter (`config :storehouse, adapter:`), by
+  default `Storehouse.Local`.
+  """
+  @spec adapter() :: module()
+  def adapter, do: Application.get_env(:storehouse, :adapter, Storehouse.Local)
+
+  @doc """
+  Checks the file at `path` and stores it under a new key, through the
+  adapter. The file at `path` is left where it is.
+
+  The file's type is the one its bytes prove (`Storehouse.Check`): a file
+  that is not of a passive type is stored as `application/octet-stream`,
+  with a key that ends in `.bin`, unless `:accept` refuses it. When the
+  adapter stores the file but gives a URL that is not safe to show
+  (`safe_url?/1`), the stored file is deleted.
+
+  ## Options
+
+    * `:name` - the file's name, for its key and for display. The default
+      is the base name of `path`.
+    * `:content_type` - the claimed type, as a browser sends it. The
+      default is the type of the name's extension. Only the bytes make an
+      image an image.
+    * `:accept` - the checked types to take, a list; another gives
+      `{:error, :not_accepted}`. The default takes every one.
+    * `:max_bytes`, `:max_pixels` - as `Storehouse.Check.describe/3`'s.
+    * `:adapter` - the store. The default is `adapter/0`.
+    * `:key` - a function of the name and the checked content type that
+      gives the key. The default is `&key/2`.
+    * `:preview` - a function of the stored file and `path` that gives
+      the URL of a smaller image of it (a thumbnail, a PDF's first page, a
+      video's poster), or `nil`. It runs while `path` is still there; the
+      app renders and stores the image. A result that is not a safe URL,
+      or an exception, gives none and logs a warning.
+  """
+  @spec store(Path.t(), keyword()) :: {:ok, Storehouse.File.t()} | {:error, term()}
+  def store(path, opts \\ []) when is_binary(path) do
+    name = clean_name(Keyword.get_lazy(opts, :name, fn -> Path.basename(path) end))
+
+    claim =
+      Keyword.get_lazy(opts, :content_type, fn -> Check.content_type(Path.extname(name)) end)
+
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+
+    with {:ok, description} <- Check.describe(path, claim, opts),
+         :ok <- accepted(description.content_type, Keyword.get(opts, :accept)),
+         {:ok, key} <- new_key(Keyword.get(opts, :key, &key/2), name, description.content_type),
+         meta = %{name: name, content_type: description.content_type, bytes: description.bytes},
+         {:ok, url} <- put(adapter, key, path, meta) do
+      file = %Storehouse.File{
+        key: key,
+        url: url,
+        name: name,
+        content_type: description.content_type,
+        bytes: description.bytes,
+        width: description.width,
+        height: description.height
+      }
+
+      {:ok, preview(file, path, Keyword.get(opts, :preview))}
+    end
+  end
+
+  defp accepted(_type, nil), do: :ok
+
+  defp accepted(type, accept) when is_list(accept),
+    do: if(type in accept, do: :ok, else: {:error, :not_accepted})
+
+  defp new_key(fun, name, content_type) do
+    case fun.(name, content_type) do
+      key when is_binary(key) -> {:ok, key}
+      other -> {:error, {:invalid_key, other}}
+    end
+  end
+
+  defp put(adapter, key, path, meta) do
+    case adapter.put(key, path, meta) do
+      {:ok, url} when is_binary(url) ->
+        if safe_url?(url),
+          do: {:ok, url},
+          else: discard(adapter, key, {:error, {:unsafe_url, url}})
+
+      {:error, reason} ->
+        {:error, reason}
+
+      other ->
+        discard(adapter, key, {:error, {:invalid_store_result, other}})
+    end
+  end
+
+  # A file the adapter stored that gives no file to keep: deleted, so that
+  # nothing is left that nothing points to.
+  defp discard(adapter, key, error) do
+    _result = adapter.delete(key)
+    error
+  end
+
+  defp preview(file, _path, nil), do: file
+
+  defp preview(file, path, fun) do
+    case fun.(file, path) do
+      nil ->
+        file
+
+      url when is_binary(url) ->
+        if safe_url?(url), do: %{file | preview: url}, else: no_preview(file, {:unsafe_url, url})
+
+      other ->
+        no_preview(file, {:invalid_preview, other})
+    end
+  rescue
+    exception -> no_preview(file, exception)
+  end
+
+  defp no_preview(file, reason) do
+    Logger.warning(
+      "Storehouse: no preview for the file #{inspect(file.name)}: #{inspect(reason)}"
+    )
+
+    file
+  end
+
+  @doc """
+  Downloads the file at `url`, from a host of `:hosts`, then checks and
+  stores it as `store/2` does: an image pasted by its address, a file an
+  agent names.
+
+  Only `https` addresses (and `http`, with `http: true`) of the hosts the
+  app allows are fetched, and a redirect only to one of them: the server
+  never fetches an address a person or an agent chose freely, which could
+  be one of the app's own network. A host is a name (`"images.example.com"`)
+  or a name with a leading `*.` for its subdomains (`"*.example.com"`).
+
+  ## Options
+
+    * `:hosts` - the hosts it fetches from (required).
+    * `:http` - whether `http` addresses are fetched. The default is
+      `false`.
+    * `:timeout` - in milliseconds, to connect and for the answer. The
+      default is 10 seconds.
+    * the options of `store/2`; `:max_bytes` stops a download as soon as
+      it is larger.
+  """
+  @spec fetch(String.t(), keyword()) :: {:ok, Storehouse.File.t()} | {:error, term()}
+  def fetch(url, opts) when is_binary(url) do
+    hosts = Keyword.fetch!(opts, :hosts)
+    schemes = if Keyword.get(opts, :http, false), do: ["https", "http"], else: ["https"]
+
+    with {:ok, uri} <- allowed(url, hosts, schemes),
+         {:ok, path, uri} <- download(uri, hosts, schemes, opts, @max_redirects) do
+      try do
+        name = uri.path |> to_string() |> Path.basename() |> URI.decode()
+        store(path, Keyword.put_new(opts, :name, if(name == "", do: "file", else: name)))
+      after
+        File.rm(path)
+      end
+    end
+  end
+
+  @doc """
+  Whether `fetch/2` takes `url` with `hosts` (`https` only).
+
+  ## Examples
+
+      iex> Storehouse.fetchable?("https://images.example.com/a.png", ["*.example.com"])
+      true
+
+      iex> Storehouse.fetchable?("https://example.com.evil.org/a.png", ["*.example.com"])
+      false
+
+  """
+  @spec fetchable?(String.t(), [String.t()]) :: boolean()
+  def fetchable?(url, hosts), do: match?({:ok, _uri}, allowed(url, hosts, ["https"]))
+
+  defp allowed(url, hosts, schemes) do
+    with %URI{scheme: scheme, host: host} = uri when is_binary(host) <- URI.parse(url),
+         true <- scheme in schemes,
+         true <- host_allowed?(String.downcase(host), hosts) do
+      {:ok, uri}
+    else
+      _other -> {:error, :not_allowed}
+    end
+  end
+
+  defp host_allowed?(host, hosts) do
+    Enum.any?(hosts, fn
+      "*." <> domain -> String.ends_with?(host, "." <> String.downcase(domain))
+      allowed -> host == String.downcase(allowed)
+    end)
+  end
+
+  defp download(_uri, _hosts, _schemes, _opts, -1), do: {:error, :too_many_redirects}
+
+  defp download(uri, hosts, schemes, opts, redirects) do
+    {:ok, _apps} = Application.ensure_all_started([:inets, :ssl])
+    timeout = Keyword.get(opts, :timeout, 10_000)
+    path = Path.join(System.tmp_dir!(), "storehouse-#{System.unique_integer([:positive])}")
+
+    http_opts = [
+      timeout: timeout,
+      connect_timeout: timeout,
+      autoredirect: false,
+      ssl: [
+        verify: :verify_peer,
+        cacerts: :public_key.cacerts_get(),
+        customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]
+      ]
+    ]
+
+    request = {String.to_charlist(URI.to_string(uri)), []}
+
+    case :httpc.request(:get, request, http_opts, sync: false, stream: :self) do
+      {:ok, ref} ->
+        case receive_body(ref, path, opts[:max_bytes], timeout) do
+          :ok -> {:ok, path, uri}
+          {:redirect, location} -> redirect(uri, location, hosts, schemes, opts, redirects, path)
+          {:error, _reason} = error -> discard_download(path, error)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp redirect(uri, location, hosts, schemes, opts, redirects, path) do
+    File.rm(path)
+
+    with {:ok, next} <- allowed(URI.to_string(URI.merge(uri, location)), hosts, schemes) do
+      download(next, hosts, schemes, opts, redirects - 1)
+    end
+  end
+
+  defp discard_download(path, error) do
+    File.rm(path)
+    error
+  end
+
+  # The answer, streamed to a file, and no more of it than `max` bytes.
+  defp receive_body(ref, path, max, timeout) do
+    receive do
+      {:http, {^ref, :stream_start, _headers}} ->
+        File.write!(path, "")
+        receive_chunks(ref, path, max, timeout, 0)
+
+      {:http, {^ref, {{_version, status, _reason}, headers, _body}}}
+      when status in [301, 302, 303, 307, 308] ->
+        case List.keyfind(headers, ~c"location", 0) do
+          {_name, location} -> {:redirect, to_string(location)}
+          nil -> {:error, {:http, status}}
+        end
+
+      {:http, {^ref, {{_version, status, _reason}, _headers, body}}} when status in 200..299 ->
+        # A short answer, all at once.
+        if is_integer(max) and byte_size(body) > max,
+          do: {:error, :too_large},
+          else: File.write(path, body)
+
+      {:http, {^ref, {{_version, status, _reason}, _headers, _body}}} ->
+        {:error, {:http, status}}
+
+      {:http, {^ref, {:error, reason}}} ->
+        {:error, reason}
+    after
+      timeout ->
+        :httpc.cancel_request(ref)
+        {:error, :timeout}
+    end
+  end
+
+  defp receive_chunks(ref, path, max, timeout, size) do
+    receive do
+      {:http, {^ref, :stream, chunk}} ->
+        size = size + byte_size(chunk)
+
+        if is_integer(max) and size > max do
+          :httpc.cancel_request(ref)
+          {:error, :too_large}
+        else
+          File.write!(path, chunk, [:append])
+          receive_chunks(ref, path, max, timeout, size)
+        end
+
+      {:http, {^ref, :stream_end, _headers}} ->
+        :ok
+
+      {:http, {^ref, {:error, reason}}} ->
+        {:error, reason}
+    after
+      timeout ->
+        :httpc.cancel_request(ref)
+        {:error, :timeout}
+    end
+  end
+
+  @doc "Deletes the file with `key`, through the adapter (`:adapter`, or `adapter/0`)."
+  @spec delete(Storehouse.Adapter.key(), keyword()) :: :ok | {:error, term()}
+  def delete(key, opts \\ []), do: Keyword.get_lazy(opts, :adapter, &adapter/0).delete(key)
+
+  @doc "Returns the URL of the file with `key`, through the adapter (`:adapter`, or `adapter/0`)."
+  @spec url(Storehouse.Adapter.key(), keyword()) :: String.t()
+  def url(key, opts \\ []), do: Keyword.get_lazy(opts, :adapter, &adapter/0).url(key)
+
+  @doc """
+  Returns a new key for a file: `yyyy/mm/<uuid>-<safe name><extension>`,
+  with the year and month of now (UTC), a random UUID, and the extension
+  of the checked content type (see `safe_name/2`).
+
+  ## Examples
+
+      iex> key = Storehouse.key("My cat (1).png", "image/png")
+      iex> [_year, _month, file] = String.split(key, "/")
+      iex> String.slice(file, 37..-1//1)
+      "My_cat_1_.png"
+
+      iex> "evil.svg" |> Storehouse.key("application/octet-stream") |> Path.extname()
+      ".bin"
+
+  """
+  @spec key(String.t(), String.t()) :: Storehouse.Adapter.key()
+  def key(name, content_type) when is_binary(name) and is_binary(content_type) do
+    now = DateTime.utc_now()
+    year = now.year |> Integer.to_string() |> String.pad_leading(4, "0")
+    month = now.month |> Integer.to_string() |> String.pad_leading(2, "0")
+    "#{year}/#{month}/#{uuid()}-#{safe_name(name, content_type)}"
+  end
+
+  @doc """
+  Returns a safe file name for a key: the client's name without its
+  extension, with only ASCII letters, digits, `.`, `-` and `_`, then the
+  extension of the checked content type. At most #{@max_name} characters.
+
+  Every run of other characters becomes one `_`, and a run of dots becomes
+  one dot. A name with nothing left is `"file"`.
+
+  ## Examples
+
+      iex> Storehouse.safe_name("résumé 2026.pdf", "application/pdf")
+      "r_sum_2026.pdf"
+
+      iex> Storehouse.safe_name("photo.html", "image/png")
+      "photo.png"
+
+      iex> Storehouse.safe_name("../../etc/passwd", "application/octet-stream")
+      "._._etc_passwd.bin"
+
+      iex> Storehouse.safe_name("", "text/plain")
+      "file.txt"
+
+  """
+  @spec safe_name(String.t(), String.t()) :: String.t()
+  def safe_name(name, content_type) when is_binary(name) and is_binary(content_type) do
+    ext = Check.extension(content_type)
+
+    base =
+      name
+      |> Path.rootname()
+      |> String.replace(~r/[^A-Za-z0-9._\-]+/, "_")
+      |> String.replace(~r/\.{2,}/, ".")
+      |> String.trim_trailing(".")
+
+    base = if base in ["", "_"], do: "file", else: base
+    binary_part(base, 0, min(byte_size(base), @max_name - byte_size(ext))) <> ext
+  end
+
+  @doc """
+  Returns `true` when `key` is a valid storage key (see the module doc).
+
+  ## Examples
+
+      iex> Storehouse.valid_key?("2026/10/a-cat.png")
+      true
+
+      iex> Storehouse.valid_key?("2026/../../etc/passwd")
+      false
+
+      iex> Storehouse.valid_key?("/etc/passwd")
+      false
+
+  """
+  @spec valid_key?(term()) :: boolean()
+  def valid_key?(key) when is_binary(key) and byte_size(key) in 1..@max_key do
+    key |> String.split("/") |> Enum.all?(&valid_segment?/1)
+  end
+
+  def valid_key?(_key), do: false
+
+  @doc false
+  @spec valid_segment?(String.t()) :: boolean()
+  def valid_segment?(segment) when segment in ["", ".", ".."], do: false
+  def valid_segment?(segment) when is_binary(segment), do: Regex.match?(@segment, segment)
+
+  @doc """
+  Returns a file name for display: control and format characters (bidi
+  controls included) removed, at most #{@max_display_name} characters, and
+  `"file"` when nothing is left.
+
+  ## Examples
+
+      iex> Storehouse.clean_name("cat\\u0000.png")
+      "cat.png"
+
+      iex> Storehouse.clean_name("a\\u202Egnp.exe")
+      "agnp.exe"
+
+  """
+  @spec clean_name(term()) :: String.t()
+  def clean_name(name) when is_binary(name) do
+    name =
+      if String.valid?(name),
+        do: name,
+        else: name |> String.codepoints() |> Enum.filter(&String.valid?/1) |> Enum.join()
+
+    name
+    |> String.replace(~r/[\p{Cc}\p{Cf}]/u, "")
+    |> String.trim()
+    |> String.slice(0, @max_display_name)
+    |> case do
+      "" -> "file"
+      clean -> clean
+    end
+  end
+
+  def clean_name(_name), do: "file"
+
+  @doc """
+  Whether `url` is safe to show and link to: `http` or `https`, or a path
+  of the app (`/uploads/…`, not `//host`).
+
+  ## Examples
+
+      iex> Storehouse.safe_url?("/uploads/a.png")
+      true
+
+      iex> Storehouse.safe_url?("javascript:alert(1)")
+      false
+
+      iex> Storehouse.safe_url?("//evil.example/a.png")
+      false
+
+  """
+  @spec safe_url?(term()) :: boolean()
+  def safe_url?("/" <> rest = url) when byte_size(url) <= 2_048,
+    do:
+      not String.starts_with?(rest, ["/", "\\"]) and
+        not String.contains?(url, ["\"", "<", ">"]) and String.printable?(url)
+
+  def safe_url?(url) when is_binary(url) and byte_size(url) <= 2_048 do
+    case URI.parse(url) do
+      %URI{scheme: scheme, host: host} when scheme in ["http", "https"] and is_binary(host) ->
+        host != "" and not String.contains?(url, ["\"", "<", ">"]) and String.printable?(url)
+
+      _other ->
+        false
+    end
+  end
+
+  def safe_url?(_url), do: false
+
+  defp uuid do
+    <<a::48, _version::4, b::12, _variant::2, c::62>> = :crypto.strong_rand_bytes(16)
+
+    <<a::48, 4::4, b::12, 2::2, c::62>>
+    |> Base.encode16(case: :lower)
+    |> then(fn <<a::binary-8, b::binary-4, c::binary-4, d::binary-4, e::binary-12>> ->
+      Enum.join([a, b, c, d, e], "-")
+    end)
+  end
+end

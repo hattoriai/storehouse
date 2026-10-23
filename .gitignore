@@ -1,0 +1,9 @@
+/_build
+/deps
+/doc
+/cover
+/priv/plts
+/tmp
+erl_crash.dump
+storehouse-*.tar
+*.ez
