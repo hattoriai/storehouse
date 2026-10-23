@@ -446,8 +446,9 @@ defmodule Storehouse do
     with ^prefix <> rest <- key,
          [days, at, _key] <- String.split(rest, "/", parts: 3),
          {_days, "d"} <- Integer.parse(days),
-         {at, ""} <- Integer.parse(at) do
-      DateTime.from_unix!(at)
+         {at, ""} <- Integer.parse(at),
+         {:ok, expires} <- DateTime.from_unix(at) do
+      expires
     else
       _not_expiring -> nil
     end
@@ -503,7 +504,7 @@ defmodule Storehouse do
 
     with :ok <- supported(adapter, :copy, 2),
          :ok <- copy_once(adapter, from, to) do
-      unless opts[:keep_cached], do: adapter.delete(from)
+      unless opts[:keep_cached], do: forget(from, adapter, opts)
       {:ok, %{file | key: to, url: adapter.url(to)}}
     end
   end
@@ -1618,6 +1619,23 @@ defmodule Storehouse do
       Storehouse.Notify.notify(:deleted, %{prefix: prefix, count: count}, opts)
       {:ok, count}
     end
+  end
+
+  @doc false
+  # A file deleted from the store, its variants and the CDN's copies with
+  # it, as delete/2 does, for the deletions of Storehouse's own (a promote,
+  # a sweep), which tell no one.
+  def forget(key, adapter, opts \\ []) do
+    with :ok <- adapter.delete(key) do
+      forgotten(key, adapter, opts)
+    end
+  end
+
+  @doc false
+  def forgotten(key, adapter, opts \\ []) do
+    Storehouse.Variants.delete(key, adapter: adapter)
+    Storehouse.Purge.deleted(key, Keyword.put(opts, :adapter, adapter))
+    :ok
   end
 
   @doc false

@@ -142,15 +142,28 @@ defmodule Storehouse.Variants do
     adapter = Keyword.get_lazy(opts, :adapter, &Storehouse.adapter/0)
     meta = %{key: file.key, variant: key, preset: preset, width: variant.width}
 
-    if exports?(renderer, :render, 4) do
-      :telemetry.span([:storehouse, :variant], meta, fn ->
-        {result, outcome} =
-          told(found_or_made(file, variant, key, adapter, config, {renderer, renderer_opts}))
+    cond do
+      not exports?(renderer, :render, 4) ->
+        {:error, :not_supported}
 
-        {result, Map.put(meta, :result, outcome)}
-      end)
-    else
-      {:error, :not_supported}
+      # Its original is past its time, deleted or about to be: so are they.
+      expired?(file.key) ->
+        {:error, :enoent}
+
+      true ->
+        :telemetry.span([:storehouse, :variant], meta, fn ->
+          {result, outcome} =
+            told(found_or_made(file, variant, key, adapter, config, {renderer, renderer_opts}))
+
+          {result, Map.put(meta, :result, outcome)}
+        end)
+    end
+  end
+
+  defp expired?(key) do
+    case Storehouse.expires_at(key) do
+      nil -> false
+      at -> DateTime.compare(at, DateTime.utc_now()) != :gt
     end
   end
 
@@ -580,6 +593,17 @@ defmodule Storehouse.Variants do
   end
 
   # The stored variant, as a file.
+  defp still_there(original, key, adapter) do
+    case adapter.head(original) do
+      {:error, :enoent} ->
+        _deleted = adapter.delete(key)
+        {:error, :enoent}
+
+      _there ->
+        :ok
+    end
+  end
+
   defp found(key, adapter) do
     with {:ok, head} <- adapter.head(key) do
       {:ok,
@@ -613,7 +637,10 @@ defmodule Storehouse.Variants do
              bytes: description.bytes,
              checksum: Storehouse.checksum(destination)
            },
-           {:ok, url} <- adapter.put(key, destination, meta) do
+           {:ok, url} <- adapter.put(key, destination, meta),
+           # The original deleted while it was drawn: the variant goes too,
+           # as delete/2 would have taken it, had it been there.
+           :ok <- still_there(file.key, key, adapter) do
         {:made,
          %Storehouse.File{
            key: key,

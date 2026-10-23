@@ -113,7 +113,18 @@ defmodule Storehouse.Sweeper do
           entries
           |> Stream.filter(sweep?)
           |> Stream.map(& &1.key)
-          |> Storehouse.delete_keys(adapter)
+          |> Stream.chunk_every(1_000)
+          |> Enum.reduce_while({:ok, 0}, fn keys, {:ok, count} ->
+            # Their variants and the CDN's copies go with them.
+            case Storehouse.delete_keys(keys, adapter) do
+              {:ok, deleted} ->
+                Enum.each(keys, &Storehouse.forgotten(&1, adapter))
+                {:cont, {:ok, count + deleted}}
+
+              error ->
+                {:halt, error}
+            end
+          end)
         end
 
       {result, %{prefix: prefix, adapter: adapter, result: result}}
