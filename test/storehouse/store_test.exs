@@ -138,5 +138,20 @@ defmodule Storehouse.StoreTest do
       assert Path.wildcard(Path.join(System.tmp_dir!(), "storehouse-*"))
              |> Enum.filter(&File.regular?/1) == []
     end
+
+    test "no answer is read past :max_bytes, whatever its status, nor past :timeout", %{
+      base: base
+    } do
+      opts = [hosts: ["127.0.0.1"], http: true, max_bytes: 100_000]
+
+      # Each 5 MB, a chunk at a time: stopped near the limit, not read whole.
+      for path <- ["/big-redirect", "/big-203", "/big-500"] do
+        task = Task.async(fn -> Storehouse.fetch(base <> path, opts) end)
+        assert Task.await(task) == {:error, :too_large}, path
+      end
+
+      assert {:error, :timeout} =
+               Storehouse.fetch(base <> "/slow", hosts: ["127.0.0.1"], http: true, timeout: 500)
+    end
   end
 end

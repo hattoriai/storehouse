@@ -27,8 +27,10 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   key at once can no longer replace a checked file.
 - `:max_pixels` refuses an image whose header gives a side of a million
   pixels or more, which it took as of unknown size.
-- `Storehouse.fetch/2` documents that `:max_bytes` holds for a `200` or
-  `206` answer only: `:httpc` reads any other whole, within `:timeout`.
+- `Storehouse.fetch/2`'s `:max_bytes` holds for every answer, a
+  redirect's or an error's as much as the file's, and `:timeout` for the
+  whole download: with `:httpc`, an answer other than a `200` or `206`
+  was read whole, however large. Its file is created where none is.
 
 ### Added
 
@@ -303,6 +305,9 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Changed
 
+- Storehouse makes its requests (S3, `fetch/2`, purges, warming) with
+  Req, now a dependency, in place of `:httpc`: one HTTP client, which
+  streams every answer.
 - The README is shorter, and its comparison table plain. Everything
   Storehouse does is in the new Features guide.
 - A file with a HEIF `ftyp` box was `application/octet-stream`; it is now

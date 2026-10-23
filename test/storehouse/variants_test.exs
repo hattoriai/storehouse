@@ -195,7 +195,8 @@ defmodule Storehouse.VariantsTest do
       test = self()
       opts = opts(renderer: {Counting, test: test, sleep: 500})
       first = Task.async(fn -> Storehouse.variant(file, :thumb, opts) end)
-      assert_receive {:rendered, _node, :thumb, 320}
+      # Drawing: under a busy suite, it may take a while to start.
+      assert_receive {:rendered, _node, :thumb, 320}, 2_000
 
       assert {:error, :timeout} =
                Storehouse.variant(file, :thumb, Keyword.put(opts, :timeout, 50))

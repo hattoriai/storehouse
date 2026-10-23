@@ -243,24 +243,17 @@ defmodule Storehouse.Responsive do
   defp absolute("/" <> _ = path, base), do: {:ok, String.trim_trailing(base, "/") <> path}
   defp absolute(url, _base), do: {:ok, url}
 
+  # The variant asked for, so that it is made; its bytes are not kept.
   defp get(url, accept, timeout) do
-    {:ok, _apps} = Application.ensure_all_started([:inets, :ssl])
+    discard = fn {:data, _data}, acc -> {:cont, acc} end
 
-    http_opts = [
-      timeout: timeout,
-      connect_timeout: timeout,
-      ssl: [
-        verify: :verify_peer,
-        cacerts: :public_key.cacerts_get(),
-        customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]
-      ]
-    ]
-
-    request = {String.to_charlist(url), [{~c"accept", String.to_charlist(accept)}]}
-
-    case :httpc.request(:get, request, http_opts, body_format: :binary) do
-      {:ok, {{_version, 200, _reason}, _headers, _body}} -> :ok
-      {:ok, {{_version, status, _reason}, _headers, _body}} -> {:error, {:status, status}}
+    case Storehouse.HTTP.request(:get, url, [{"accept", accept}], nil,
+           timeout: timeout,
+           connect_timeout: timeout,
+           into: discard
+         ) do
+      {:ok, 200, _headers, _body} -> :ok
+      {:ok, status, _headers, _body} -> {:error, {:status, status}}
       {:error, reason} -> {:error, reason}
     end
   end

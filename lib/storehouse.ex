@@ -1326,10 +1326,9 @@ defmodule Storehouse do
     * the options of `store/2`; `:max_bytes` stops a download as soon as
       it is larger.
 
-  `:max_bytes` holds for a `200` or `206` answer, which comes a chunk at a
-  time. Any other answer (a redirect, an error, another `2xx`) `:httpc`
-  reads whole before Storehouse sees it, within `:timeout`: allow hosts
-  whose answers no one else makes, not a host of other people's content.
+  `:max_bytes` holds for every answer, a redirect's or an error's as much
+  as the file's, and `:timeout` for the whole of it: no answer is read
+  further than either.
   """
   @spec fetch(String.t(), keyword()) :: {:ok, Storehouse.File.t()} | {:error, term()}
   def fetch(url, opts) when is_binary(url) do
@@ -1389,33 +1388,65 @@ defmodule Storehouse do
   defp download(_uri, _hosts, _schemes, _opts, -1), do: {:error, :too_many_redirects}
 
   defp download(uri, hosts, schemes, opts, redirects) do
-    {:ok, _apps} = Application.ensure_all_started([:inets, :ssl])
     timeout = Keyword.get(opts, :timeout, 10_000)
     path = Path.join(System.tmp_dir!(), "storehouse-#{System.unique_integer([:positive])}")
+    {:ok, io} = File.open(path, [:write, :binary, :exclusive])
+    deadline = System.monotonic_time(:millisecond) + timeout
 
-    http_opts = [
-      timeout: timeout,
-      connect_timeout: timeout,
-      autoredirect: false,
-      ssl: [
-        verify: :verify_peer,
-        cacerts: :public_key.cacerts_get(),
-        customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]
-      ]
-    ]
+    request =
+      Storehouse.HTTP.base(:get, URI.to_string(uri), [],
+        timeout: timeout,
+        connect_timeout: timeout,
+        into: &received(&1, &2, io, opts[:max_bytes], deadline)
+      )
 
-    request = {String.to_charlist(URI.to_string(uri)), []}
+    result =
+      try do
+        Req.request(request)
+      after
+        File.close(io)
+      end
 
-    case :httpc.request(:get, request, http_opts, sync: false, stream: :self) do
-      {:ok, ref} ->
-        case receive_body(ref, path, opts[:max_bytes], timeout) do
-          :ok -> {:ok, path, uri}
-          {:redirect, location} -> redirect(uri, location, hosts, schemes, opts, redirects, path)
-          {:error, _reason} = error -> discard_download(path, error)
+    case result do
+      {:ok, %Req.Response{private: %{refused: reason}}} ->
+        discard_download(path, {:error, reason})
+
+      {:ok, %Req.Response{status: status} = response} when status in [301, 302, 303, 307, 308] ->
+        case Req.Response.get_header(response, "location") do
+          [location | _] -> redirect(uri, location, hosts, schemes, opts, redirects, path)
+          [] -> discard_download(path, {:error, {:http, status}})
         end
 
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, %Req.Response{status: status}} when status in 200..299 ->
+        {:ok, path, uri}
+
+      {:ok, %Req.Response{status: status}} ->
+        discard_download(path, {:error, {:http, status}})
+
+      {:error, error} ->
+        discard_download(path, {:error, Map.get(error, :reason, error)})
+    end
+  end
+
+  # Each chunk of the answer, whatever its status, counted: no more than
+  # `max` bytes, and none after the deadline. Only a 2xx's are kept.
+  defp received({:data, data}, {request, response}, io, max, deadline) do
+    bytes = Req.Response.get_private(response, :bytes, 0) + byte_size(data)
+    response = Req.Response.put_private(response, :bytes, bytes)
+
+    cond do
+      is_integer(max) and bytes > max ->
+        {:halt, {request, Req.Response.put_private(response, :refused, :too_large)}}
+
+      System.monotonic_time(:millisecond) > deadline ->
+        {:halt, {request, Req.Response.put_private(response, :refused, :timeout)}}
+
+      response.status in 200..299 ->
+        :ok = IO.binwrite(io, data)
+        {:cont, {request, response}}
+
+      true ->
+        {:cont, {request, response}}
     end
   end
 
@@ -1430,63 +1461,6 @@ defmodule Storehouse do
   defp discard_download(path, error) do
     File.rm(path)
     error
-  end
-
-  # The answer, streamed to a file, and no more of it than `max` bytes.
-  defp receive_body(ref, path, max, timeout) do
-    receive do
-      {:http, {^ref, :stream_start, _headers}} ->
-        File.write!(path, "")
-        receive_chunks(ref, path, max, timeout, 0)
-
-      {:http, {^ref, {{_version, status, _reason}, headers, _body}}}
-      when status in [301, 302, 303, 307, 308] ->
-        case List.keyfind(headers, ~c"location", 0) do
-          {_name, location} -> {:redirect, to_string(location)}
-          nil -> {:error, {:http, status}}
-        end
-
-      {:http, {^ref, {{_version, status, _reason}, _headers, body}}} when status in 200..299 ->
-        # A short answer, all at once.
-        if is_integer(max) and byte_size(body) > max,
-          do: {:error, :too_large},
-          else: File.write(path, body)
-
-      {:http, {^ref, {{_version, status, _reason}, _headers, _body}}} ->
-        {:error, {:http, status}}
-
-      {:http, {^ref, {:error, reason}}} ->
-        {:error, reason}
-    after
-      timeout ->
-        :httpc.cancel_request(ref)
-        {:error, :timeout}
-    end
-  end
-
-  defp receive_chunks(ref, path, max, timeout, size) do
-    receive do
-      {:http, {^ref, :stream, chunk}} ->
-        size = size + byte_size(chunk)
-
-        if is_integer(max) and size > max do
-          :httpc.cancel_request(ref)
-          {:error, :too_large}
-        else
-          File.write!(path, chunk, [:append])
-          receive_chunks(ref, path, max, timeout, size)
-        end
-
-      {:http, {^ref, :stream_end, _headers}} ->
-        :ok
-
-      {:http, {^ref, {:error, reason}}} ->
-        {:error, reason}
-    after
-      timeout ->
-        :httpc.cancel_request(ref)
-        {:error, :timeout}
-    end
   end
 
   @doc """

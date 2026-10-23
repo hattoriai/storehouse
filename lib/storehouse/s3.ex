@@ -1042,10 +1042,8 @@ defmodule Storehouse.S3 do
   @doc false
   def __store__, do: {__MODULE__, config()}
 
-  # A signed request, with :httpc. A file's body is streamed from the disk.
+  # A signed request, with Req. A file's body is streamed from the disk.
   defp request(c, method, uri, headers, body) do
-    {:ok, _apps} = Application.ensure_all_started([:inets, :ssl])
-
     signed =
       Signature.sign_headers(
         method |> Atom.to_string() |> String.upcase(),
@@ -1054,68 +1052,27 @@ defmodule Storehouse.S3 do
         credentials(c)
       )
 
-    url = String.to_charlist(URI.to_string(uri))
+    # The host is the connection's; the size, the body's.
+    request_headers = for {k, v} <- signed, k not in ["host", "content-length"], do: {k, v}
 
     request_headers =
-      for {k, v} <- signed,
-          k not in ["host", "content-type", "content-length"],
-          do: {String.to_charlist(k), String.to_charlist(v)}
+      if List.keymember?(request_headers, "content-type", 0),
+        do: request_headers,
+        else: [{"content-type", "application/octet-stream"} | request_headers]
 
-    type =
-      signed
-      |> List.keyfind("content-type", 0)
-      |> then(&if &1, do: elem(&1, 1), else: "application/octet-stream")
-
-    request =
+    {request_headers, body} =
       case body do
+        # A PUT or POST without a body says so: a copy, a multipart start.
         nil when method in [:put, :post] ->
-          {url, request_headers, String.to_charlist(type), ""}
-
-        nil ->
-          {url, request_headers}
-
-        body when is_binary(body) ->
-          {url, request_headers, String.to_charlist(type), body}
+          {request_headers, ""}
 
         {:file, path, size} ->
-          {url, [{~c"content-length", Integer.to_charlist(size)} | request_headers],
-           String.to_charlist(type), {&stream_file/1, {path, nil}}}
+          {[{"content-length", Integer.to_string(size)} | request_headers], {:file, path}}
+
+        body ->
+          {request_headers, body}
       end
 
-    http_opts = [timeout: 60_000, connect_timeout: 10_000, ssl: ssl()]
-
-    case :httpc.request(method, request, http_opts, body_format: :binary) do
-      {:ok, {{_version, status, _reason}, headers, body}} ->
-        {:ok, status,
-         Enum.map(headers, fn {k, v} -> {String.downcase(to_string(k)), to_string(v)} end), body}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  # :httpc's body function: the file, a megabyte at a time.
-  defp stream_file({path, nil}) do
-    {:ok, file} = File.open(path, [:read, :binary])
-    stream_file({path, file})
-  end
-
-  defp stream_file({path, file}) do
-    case IO.binread(file, 1_048_576) do
-      data when is_binary(data) ->
-        {:ok, data, {path, file}}
-
-      _eof ->
-        File.close(file)
-        :eof
-    end
-  end
-
-  defp ssl do
-    [
-      verify: :verify_peer,
-      cacerts: :public_key.cacerts_get(),
-      customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]
-    ]
+    Storehouse.HTTP.request(method, URI.to_string(uri), request_headers, body)
   end
 end

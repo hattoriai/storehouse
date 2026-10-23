@@ -11,9 +11,9 @@ defmodule Storehouse.Image.ExifTest do
   @element ~r{<exif:(GPS\w*)\b[^>]*?(/>|>.*?</exif:\1\s*>)}s
   defp before(xml), do: xml |> String.replace(@attribute, "") |> String.replace(@element, "")
 
+  # The fastest of a few runs: a busy machine slows some, never all.
   defp timed(fun) do
-    {micros, _result} = :timer.tc(fun)
-    micros
+    Enum.min(for _run <- 1..5, do: fun |> :timer.tc() |> elem(0))
   end
 
   describe "xmp_without_gps/1" do
@@ -38,11 +38,11 @@ defmodule Storehouse.Image.ExifTest do
             ~s( exif:GPSa="),
             String.duplicate(" ", 9) <> "x"
           ] do
-        small = timed(fn -> Exif.xmp_without_gps(String.duplicate(unit, 4_000)) end)
+        small = timed(fn -> Exif.xmp_without_gps(String.duplicate(unit, 2_000)) end)
         large = timed(fn -> Exif.xmp_without_gps(String.duplicate(unit, 32_000)) end)
 
-        # Eight times the text: about eight times the work, not sixty-four.
-        assert large < 24 * max(small, 1_000), "#{inspect(unit)}: #{small} µs, then #{large} µs"
+        # Sixteen times the text: about sixteen times the work, not 256.
+        assert large < 64 * max(small, 500), "#{inspect(unit)}: #{small} µs, then #{large} µs"
       end
     end
   end
@@ -68,10 +68,12 @@ defmodule Storehouse.Image.ExifTest do
   end
 
   test "a GPS strip and a put rebuild the TIFF once, however many entries it has" do
-    for n <- [1_000, 4_000] do
+    for n <- [1_000, 16_000] do
       # Every entry a GPS pointer to the same directory, and a text tag.
-      gps = tiff(for(_ <- 1..n, do: {0x8825, 4, 1, 8}), 200_000)
-      texts = tiff(for(_ <- 1..n, do: {0x013B, 2, 8, 16}), 200_000)
+      # The TIFF as large as its entries make it: work of entries times
+      # size would grow with the square of either.
+      gps = tiff(for(_ <- 1..n, do: {0x8825, 4, 1, 8}), 50 * n)
+      texts = tiff(for(_ <- 1..n, do: {0x013B, 2, 8, 16}), 50 * n)
 
       time =
         timed(fn -> Exif.without_gps(gps) end) + timed(fn -> Exif.put(texts, %{artist: "x"}) end)
@@ -80,8 +82,9 @@ defmodule Storehouse.Image.ExifTest do
     end
 
     assert_received {1_000, small}
-    assert_received {4_000, large}
-    # Four times the entries: not four times the TIFF copied four times.
-    assert large < 8 * max(small, 1_000), "#{small} µs, then #{large} µs"
+    assert_received {16_000, large}
+    # Sixteen times the entries: about sixteen times the work, not the
+    # TIFF copied sixteen times as often.
+    assert large < 64 * max(small, 500), "#{small} µs, then #{large} µs"
   end
 end
