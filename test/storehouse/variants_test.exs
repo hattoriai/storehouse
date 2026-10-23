@@ -218,6 +218,13 @@ defmodule Storehouse.VariantsTest do
       assert is_binary(reason)
     end
 
+    test "an original of more pixels than the renderer takes, by its header", %{original: file} do
+      # harbour.jpg is 1200 × 800: past 900,000 pixels.
+      small = opts(renderer: {Storehouse.Renderer.Vix, max_pixels: 900_000})
+      assert {:error, :too_large} = Storehouse.variant(file, :thumb, small)
+      assert {:ok, _thumb} = Storehouse.variant(file, :thumb, opts())
+    end
+
     test "a renderer of URLs makes none", %{original: file} do
       assert {:error, :not_supported} = Storehouse.variant(file, :thumb, opts(renderer: Urls))
     end

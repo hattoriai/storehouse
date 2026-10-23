@@ -163,7 +163,11 @@ defmodule Storehouse.Check do
 
     * `:max_bytes` - a larger file gives `{:error, :too_large}`.
     * `:max_pixels` - an image of more pixels (width × height) gives
-      `{:error, :too_large}`: one a browser would struggle to draw.
+      `{:error, :too_large}`: one a browser would struggle to draw. So does
+      one whose header gives a side of a million pixels or more. An image
+      whose size its first bytes do not say (a TIFF whose directory comes
+      after its pixels) has none to check here: `Storehouse.Renderer.Vix`
+      checks its size again before it renders it.
   """
   @spec describe(Path.t(), String.t() | nil, keyword()) :: {:ok, description()} | {:error, term()}
   def describe(path, claim \\ nil, opts \\ []) do
@@ -190,10 +194,22 @@ defmodule Storehouse.Check do
       end
 
     with :ok <- at_most(bytes, opts[:max_bytes]),
-         :ok <- at_most(width && height && width * height, opts[:max_pixels]) do
-      {:ok, %{content_type: content_type, bytes: bytes, width: width, height: height}}
+         :ok <- pixels_at_most(width, height, opts[:max_pixels]) do
+      {:ok,
+       %{content_type: content_type, bytes: bytes, width: shown(width), height: shown(height)}}
     end
   end
+
+  defp pixels_at_most(width, height, max) when :huge in [width, height] and is_integer(max),
+    do: {:error, :too_large}
+
+  defp pixels_at_most(width, height, max) when is_integer(width) and is_integer(height),
+    do: at_most(width * height, max)
+
+  defp pixels_at_most(_width, _height, _max), do: :ok
+
+  defp shown(:huge), do: nil
+  defp shown(size), do: size
 
   @doc "How much of the start of a file `describe_head/4` reads, in bytes."
   @spec head_size() :: pos_integer()
@@ -679,6 +695,9 @@ defmodule Storehouse.Check do
   defp uint(<<n::little-16>>, :little), do: n
   defp uint(<<n::big-16>>, :big), do: n
 
+  # A size past a million pixels is no photograph's: not a size to show,
+  # but one :max_pixels refuses.
   defp dimension(value) when is_integer(value) and value > 0 and value < 1_000_000, do: value
+  defp dimension(value) when is_integer(value) and value >= 1_000_000, do: :huge
   defp dimension(_value), do: nil
 end

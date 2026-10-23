@@ -268,4 +268,47 @@ defmodule Storehouse.CheckTest do
       refute_received {:put, _, _, _}
     end
   end
+
+  describe ":max_pixels, of an image whose size is not plain" do
+    # A little-endian TIFF whose first directory gives its size.
+    defp tiff(width, height, ifd_at) do
+      entries =
+        for {tag, value} <- [{0x0100, width}, {0x0101, height}],
+            do: <<tag::little-16, 4::little-16, 1::little-32, value::little-32>>
+
+      ifd = <<2::little-16>> <> IO.iodata_to_binary(entries) <> <<0::32>>
+      <<"II", 42::little-16, ifd_at::little-32>> <> :binary.copy(<<0>>, ifd_at - 8) <> ifd
+    end
+
+    test "a side of a million pixels or more is refused, not taken as unknown" do
+      head = tiff(100_000, 100_000, 8)
+
+      assert {:error, :too_large} =
+               Storehouse.Check.describe_head(head, byte_size(head), "image/tiff",
+                 max_pixels: 50_000_000
+               )
+
+      head = tiff(2_000_000, 10, 8)
+
+      assert {:error, :too_large} =
+               Storehouse.Check.describe_head(head, byte_size(head), "image/tiff",
+                 max_pixels: 50_000_000
+               )
+
+      # Without the limit, the size is not one to show.
+      assert {:ok, %{width: nil, height: 10}} =
+               Storehouse.Check.describe_head(head, byte_size(head), "image/tiff")
+    end
+
+    test "one whose directory is past the first bytes has no size to check here" do
+      tiff = tiff(100_000, 100_000, 300_000)
+      head = binary_part(tiff, 0, Storehouse.Check.head_size())
+
+      # The renderer checks it again before it draws a pixel.
+      assert {:ok, %{content_type: "image/tiff", width: nil}} =
+               Storehouse.Check.describe_head(head, byte_size(tiff), "image/tiff",
+                 max_pixels: 50_000_000
+               )
+    end
+  end
 end
