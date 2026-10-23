@@ -9,10 +9,14 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [0.2.0] - 2026-10-23
 
-### Changed
+### Security
 
-- The README is shorter, and its comparison table plain. Everything
-  Storehouse does is in the new Features guide.
+- Storehouse takes plug_crypto 2.2.1 or later, for EEF-CVE-2026-105963
+  (GHSA-ffw9-w85g-f2vh): with an argument of the wrong type,
+  `Plug.Crypto`'s functions could write the secret they were given to the
+  logs, in the stack trace. Storehouse's own call
+  (`Storehouse.Local.signed?/4`) gives it binaries only, but an app that
+  updates Storehouse now gets the fixed plug_crypto too.
 
 ### Added
 
@@ -264,6 +268,8 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Changed
 
+- The README is shorter, and its comparison table plain. Everything
+  Storehouse does is in the new Features guide.
 - A file with a HEIF `ftyp` box was `application/octet-stream`; it is now
   `image/heic`, `image/heif` or `image/avif`.
 - Storehouse's JSON is in one place, a module of its own: the app's
