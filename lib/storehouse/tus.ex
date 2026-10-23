@@ -44,8 +44,19 @@ defmodule Storehouse.Tus do
   @spec sweep(module(), keyword()) :: {:ok, non_neg_integer()}
   def sweep(state \\ ETS, opts \\ []) do
     expired = state.expired(DateTime.utc_now())
-    Enum.each(expired, &TusPlug.give_up(&1, state, opts))
+    Enum.each(expired, &given_up(&1, state, opts))
     {:ok, length(expired)}
+  end
+
+  # One upload that cannot be given up (its store down) stops none of the
+  # others, nor the process that keeps them all.
+  defp given_up(upload, state, opts) do
+    TusPlug.give_up(upload, state, opts)
+  rescue
+    error ->
+      Logger.warning(
+        "Storehouse.Tus: the upload #{upload.id} was not given up: #{Exception.message(error)}"
+      )
   end
 
   @impl GenServer
@@ -103,6 +114,15 @@ defmodule Storehouse.Tus.State do
 
   @doc "The uploads whose `:expires_at` is before `now`."
   @callback expired(now :: DateTime.t()) :: [upload()]
+
+  @doc """
+  The uploads in progress of `owner` (an upload's `:owner`): with it, the
+  plug limits how many one owner has at once (`:max_uploads`), and counts
+  their sizes against its `:room`.
+  """
+  @callback owned(owner :: String.t()) :: [upload()]
+
+  @optional_callbacks owned: 1
 end
 
 defmodule Storehouse.Tus.State.ETS do
@@ -131,6 +151,11 @@ defmodule Storehouse.Tus.State.ETS do
   def delete(id) do
     :ets.delete(table!(), id)
     :ok
+  end
+
+  @impl true
+  def owned(owner) do
+    for {_id, %{owner: ^owner} = upload} <- :ets.tab2list(table!()), do: upload
   end
 
   @impl true
