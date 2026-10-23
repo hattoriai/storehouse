@@ -80,6 +80,10 @@ It gives your app:
 * **files read back**: a file's size and type without reading it, its
   bytes all at once, as a stream a chunk at a time, or to a path, each
   refused past a size limit before a byte is read;
+* **work after the upload**: steps of your own (an image's EXIF, a PDF's
+  pages) run on a stored file, at once or out of the request, in a
+  process of your app's or in Oban, their results kept in its metadata
+  and saved in its record's column;
 * **metadata of your own** on each file (a caption, a credit), kept in
   its column and sent in its JSON, apart from what analysis reads from
   the file, which stays out of the JSON unless you ask for it;
@@ -192,7 +196,8 @@ user
 The guides: [Stores](guides/stores.md) (the local disk, S3, LocalStack,
 development), [Direct uploads](guides/direct_uploads.md) (and streamed
 ones), [Ecto](guides/ecto.md), [Private files](guides/private_files.md),
-[Serving](guides/serving.md) and [LiveView](guides/liveview.md).
+[Serving](guides/serving.md), [LiveView](guides/liveview.md) and
+[After the upload](guides/analysis.md).
 
 ## How Storehouse compares
 
@@ -214,7 +219,7 @@ another library is welcome as an issue.
 | Reading a file back | Yes | Yes | Yes | Yes | Yes |
 | A file's own metadata | Yes, kept apart from the analysis's | No | Yes | Yes | Yes, shared with the analysis's |
 | Several stores at once | Not yet ([#1](https://github.com/hattoriai/storehouse/issues/1)) | Per uploader | Per file | Yes | One at a time |
-| Work after the upload, analysis | Not yet ([#3](https://github.com/hattoriai/storehouse/issues/3)) | No | No | Yes | Yes, on Oban |
+| Work after the upload, analysis | Yes: steps of your own, in a process of your app's or in Oban | No | No | Yes | Yes, on Oban |
 | Variants | Not yet ([#6](https://github.com/hattoriai/storehouse/issues/6)) | Made at upload | No | Yes | On demand |
 | Placeholders while an image loads | Not yet ([#4](https://github.com/hattoriai/storehouse/issues/4)) | No | No | Yes | No |
 | A table of files | Not yet ([#16](https://github.com/hattoriai/storehouse/issues/16)) | No | No | Yes | Yes |
@@ -226,9 +231,6 @@ another library is welcome as an issue.
 
 ## Roadmap
 
-* **Work after the upload, with no job queue**: versions of an image made
-  when it lands, previews, analysis, in supervised processes of the app
-  (Oban, when the work must outlive a deploy).
 * **Variants**: images resized and converted on demand, and cached, each
   made once however many ask for it at the same time, across a cluster.
 * **Previews and analysis**: a PDF's first page, a video's poster, its

@@ -226,4 +226,101 @@ defmodule Storehouse.EctoTest do
 
     assert Repo.get!(User, user.id).avatar.metadata == %{}
   end
+
+  describe "analysis" do
+    alias StorehouseTest.Analyzers
+
+    test "insert/3 with :analyze saves the results in the column" do
+      {:ok, user} =
+        %User{}
+        |> changeset(%{name: "Ana"}, upload("harbour.jpg"))
+        |> then(&Storehouse.Ecto.insert(Repo, &1, analyze: [avatar: [Analyzers.Bytes]]))
+
+      loaded = Repo.get!(User, user.id)
+      assert Storehouse.File.analyzed(loaded.avatar, "bytes") == %{"bytes" => 35_367}
+    end
+
+    test "update/3 analyzes only the files the save put there" do
+      {:ok, user} =
+        %User{}
+        |> changeset(%{name: "Ana"}, nil)
+        |> Storehouse.Ecto.put_file(:photos, [upload("harbour.jpg")])
+        |> then(&Storehouse.Ecto.insert(Repo, &1))
+
+      [first] = user.photos
+
+      {:ok, user} =
+        user
+        |> change()
+        |> Storehouse.Ecto.put_file(:photos, [first, upload("small.png")])
+        |> then(
+          &Storehouse.Ecto.update(Repo, &1, analyze: [photos: [{Analyzers.Bytes, test: self()}]])
+        )
+
+      [_first, second] = user.photos
+      assert_received {:bytes, key, _path, true}
+      assert key == second.key
+      refute_received {:bytes, _key, _path, _there}
+
+      assert [kept, analyzed] = Repo.get!(User, user.id).photos
+      assert Storehouse.File.analyzed(kept, "bytes") == nil
+      assert Storehouse.File.analyzed(analyzed, "bytes")["bytes"] > 0
+    end
+
+    test "the results leave what the app changed meanwhile, and a file gone" do
+      {:ok, user} =
+        %User{}
+        |> changeset(%{name: "Ana"}, upload("harbour.jpg"))
+        |> then(&Storehouse.Ecto.insert(Repo, &1))
+
+      {:ok, analyzed} = Storehouse.analyze(user.avatar, [Analyzers.NoFile])
+
+      # Meanwhile, a caption.
+      {:ok, _user} =
+        user
+        |> change()
+        |> Storehouse.Ecto.put_metadata(:avatar, %{caption: "The quay"})
+        |> Repo.update()
+
+      :ok = Storehouse.Ecto.save_analyzed(analyzed, Repo, User, user.id, :avatar)
+
+      avatar = Repo.get!(User, user.id).avatar
+      assert avatar.metadata["caption"] == "The quay"
+      assert Storehouse.File.analyzed(avatar, "no_file") == %{"ran" => true}
+
+      # The file replaced since: its analysis is not saved on the new one.
+      {:ok, user} =
+        Repo.get!(User, user.id)
+        |> change()
+        |> Storehouse.Ecto.put_file(:avatar, upload("small.png"))
+        |> then(&Storehouse.Ecto.update(Repo, &1))
+
+      {:ok, stale} = Storehouse.analyze(analyzed, [Analyzers.Skip])
+      :ok = Storehouse.Ecto.save_analyzed(stale, Repo, User, user.id, :avatar)
+      assert Repo.get!(User, user.id).avatar.metadata == %{}
+
+      # A record deleted.
+      {:ok, _deleted} = Storehouse.Ecto.delete(Repo, Repo.get!(User, user.id))
+      assert :ok = Storehouse.Ecto.save_analyzed(stale, Repo, User, user.id, :avatar)
+    end
+
+    test "with runner: :oban, in a job" do
+      start_supervised!({Oban, name: StorehouseTest.Oban, repo: Repo, testing: :inline})
+
+      {:ok, user} =
+        %User{}
+        |> changeset(%{name: "Ana"}, upload("harbour.jpg"))
+        |> then(&Storehouse.Ecto.insert(Repo, &1))
+
+      assert :ok =
+               Storehouse.Ecto.analyze_later(Repo, user, :avatar, [Analyzers.Bytes],
+                 runner: :oban,
+                 oban: [name: StorehouseTest.Oban]
+               )
+
+      assert Storehouse.File.analyzed(Repo.get!(User, user.id).avatar, "bytes") == %{
+               "bytes" => 35_367
+             }
+    end
+  end
 end

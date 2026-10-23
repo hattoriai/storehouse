@@ -41,6 +41,18 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 - `Storehouse.File` as JSON (`JSON.Encoder`, and `Jason.Encoder` with
   Jason), without the analysis's metadata; `Storehouse.File.to_map/2`
   chooses what goes.
+- Work after the upload: `Storehouse.Analyzer`, a step of the app's that
+  reads a stored file, its result kept under the file's `"analyzed"`
+  metadata. `Storehouse.analyze/3` runs steps at once, each once (or again
+  with `force: true`), a failure kept with why; `store/2`'s `:analyze`
+  runs them on the file just stored, from its path.
+  `Storehouse.analyze_later/3` runs them in `Storehouse.Tasks`, a
+  supervisor of the app's, or in Oban (`runner: :oban`,
+  `Storehouse.Oban.Analyze`), then calls the app's `:then`.
+  `Storehouse.Ecto.analyze_later/5`, and `insert/3` and `update/3` with
+  `:analyze`, save the results in the record's column. A span per step,
+  `[:storehouse, :analyze, ...]`. `Storehouse.Analyzer.Size`, a step that
+  asks the store a file's real size and type.
 
 ### Changed
 

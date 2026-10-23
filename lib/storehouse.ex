@@ -67,6 +67,10 @@ defmodule Storehouse do
   require Logger
 
   alias Storehouse.Check
+  alias Storehouse.Oban.Analyze, as: AnalyzeJob
+
+  # Oban is optional: these are called only with runner: :oban.
+  @compile {:no_warn_undefined, [Oban, AnalyzeJob]}
 
   @max_name 100
   @max_display_name 200
@@ -104,6 +108,10 @@ defmodule Storehouse do
     * `:adapter` - the store. The default is `adapter/0`.
     * `:key` - a function of the name and the checked content type that
       gives the key. The default is `&key/2`.
+    * `:analyze` - analysis steps (`Storehouse.Analyzer`) to run once the
+      file is stored, from `path`, with no download: the file comes with
+      their results. A step that fails keeps why, and the file is stored
+      either way. For work out of the request, `analyze_later/3`.
     * `:metadata` - the file's own (`Storehouse.Metadata`): a caption, a
       credit. Metadata that JSON cannot hold gives
       `{:error, {:invalid_metadata, path}}`, and nothing is stored.
@@ -151,9 +159,16 @@ defmodule Storehouse do
         metadata: metadata
       }
 
-      {:ok, preview(file, path, Keyword.get(opts, :preview))}
+      file
+      |> preview(path, Keyword.get(opts, :preview))
+      |> analyze_stored(path, adapter, Keyword.get(opts, :analyze, []))
     end
   end
+
+  defp analyze_stored(file, _path, _adapter, []), do: {:ok, file}
+
+  defp analyze_stored(file, path, adapter, steps),
+    do: Storehouse.Analyzer.run(file, steps, path: path, adapter: adapter)
 
   # The metadata a new file starts with: the app's, never the analysis's.
   defp initial_metadata(opts) do
@@ -626,6 +641,89 @@ defmodule Storehouse do
     error in [Storehouse.ReadError, File.Error] ->
       File.rm(path)
       {:error, error.reason}
+  end
+
+  @doc """
+  Runs the analysis steps of a file at once (`Storehouse.Analyzer`), each
+  one's result kept in its metadata under `"analyzed"`: `{:ok, file}`.
+  A step that fails keeps why, and leaves the others' results;
+  `{:error, reason}` is for a file that could not be read for them.
+
+  ## Options
+
+    * `:force` - runs the steps whose result the file has already. The
+      default is `false`.
+    * `:max_bytes` - the largest file to read for them (`download/3`).
+    * `:adapter` - as for `store/2`.
+  """
+  @spec analyze(Storehouse.File.t(), [Storehouse.Analyzer.step()], keyword()) ::
+          {:ok, Storehouse.File.t()} | {:error, term()}
+  def analyze(%Storehouse.File{} = file, steps, opts \\ []) when is_list(steps) do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+    Storehouse.Analyzer.run(file, steps, Keyword.put(opts, :adapter, adapter))
+  end
+
+  @doc """
+  Runs the analysis steps of a file out of the request, then gives the
+  file with their results to the app's `:then`, to save them:
+  `Storehouse.Ecto.analyze_later/5` saves them in a record's column.
+
+      Storehouse.analyze_later(file, [MyApp.Analyzers.Pages],
+        then: {MyApp.Documents, :analyzed, [document.id]}
+      )
+
+  `:then` is `{module, function, args}`, called with the file first, then
+  `args`. A file that cannot be read for the steps gives it nothing: with
+  Oban, the job is tried again.
+
+  ## Options
+
+    * `:then` - the function (required).
+    * `:runner` - `:task` (the default) runs them in `Storehouse.Tasks`, a
+      supervisor of the app's, or at once without it; `:oban` in an Oban
+      job (`Storehouse.Oban.Analyze`), which outlives a deploy.
+    * `:oban` - for `runner: :oban`, the job's options (`:queue`,
+      `:max_attempts`, …) and `:name`, the Oban instance (the default is
+      `Oban`).
+    * `:force`, `:max_bytes` and `:adapter` - as for `analyze/3`.
+  """
+  @spec analyze_later(Storehouse.File.t(), [Storehouse.Analyzer.step()], keyword()) ::
+          :ok | {:error, term()}
+  def analyze_later(%Storehouse.File{} = file, steps, opts) when is_list(steps) do
+    {module, function, args} = Keyword.fetch!(opts, :then)
+    true = is_atom(module) and is_atom(function) and is_list(args)
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+    later = opts |> Keyword.take([:then, :force, :max_bytes]) |> Keyword.put(:adapter, adapter)
+
+    case Keyword.get(opts, :runner, :task) do
+      :task -> Storehouse.Tasks.run(fn -> analyze_now(file, steps, later) end)
+      :oban -> analyze_in_oban(file, steps, later, Keyword.get(opts, :oban, []))
+    end
+  end
+
+  defp analyze_in_oban(file, steps, later, oban) do
+    {name, job} = Keyword.pop(oban, :name, Oban)
+    term = Base.encode64(:erlang.term_to_binary({file, steps, later}))
+    names = Enum.map(steps, &Storehouse.Analyzer.name/1)
+
+    case Oban.insert(
+           name,
+           AnalyzeJob.new(%{key: file.key, steps: names, term: term}, job)
+         ) do
+      {:ok, _job} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc false
+  # The work of analyze_later/3: the steps, then the app's function.
+  def analyze_now(file, steps, opts) do
+    {module, function, args} = Keyword.fetch!(opts, :then)
+
+    with {:ok, file} <- analyze(file, steps, opts) do
+      _result = apply(module, function, [file | args])
+      :ok
+    end
   end
 
   defp supported(adapter, function, arity) do

@@ -14,6 +14,15 @@ if url = System.get_env("DATABASE_URL") do
   _ = Ecto.Adapters.Postgres.storage_up(Ecto.Repo.Supervisor.parse_url(url))
   {:ok, _pid} = StorehouseTest.Repo.start_link()
 
+  # Oban's table, for the analysis run in Oban jobs.
+  defmodule StorehouseTest.ObanMigration do
+    use Ecto.Migration
+    def up, do: Oban.Migrations.up()
+    def down, do: Oban.Migrations.down()
+  end
+
+  Ecto.Migrator.up(StorehouseTest.Repo, 1, StorehouseTest.ObanMigration, log: false)
+
   StorehouseTest.Repo.query!("""
   CREATE TABLE IF NOT EXISTS storehouse_users (
     id bigserial PRIMARY KEY,
