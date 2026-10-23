@@ -60,9 +60,14 @@ defmodule Storehouse.Analyzer do
   `{:ok, result}` is kept as the step's result, a map JSON can hold
   (`Storehouse.Metadata`); `:skip` when the step does not apply to the
   file.
+
+  A step that changes the stored file (`Storehouse.Analyzer.EditMetadata`)
+  gives `{:ok, result, path}`, with the file as it is now at `path`, a
+  temporary file of its own: the steps after it read that one, and it is
+  removed after them.
   """
   @callback analyze(Storehouse.File.t(), path :: Path.t() | nil, opts :: keyword()) ::
-              {:ok, map()} | :skip | {:error, term()}
+              {:ok, map()} | {:ok, map(), Path.t()} | :skip | {:error, term()}
 
   @doc """
   The name the step's result is kept under. Optional: the default is the
@@ -104,8 +109,23 @@ defmodule Storehouse.Analyzer do
           do: {module, Keyword.put_new(step_opts, :adapter, opts[:adapter])}
 
     with_source(file, steps, opts, fn path ->
-      {:ok, Enum.reduce(steps, file, &run_step(&2, &1, path, opts)), Enum.map(steps, &name/1)}
+      {:ok, run_steps(file, steps, path, opts), Enum.map(steps, &name/1)}
     end)
+  end
+
+  # Each step reads the file from where the step before left it; the
+  # files steps left are removed after them.
+  defp run_steps(file, steps, path, opts) do
+    {file, _path, left} =
+      Enum.reduce(steps, {file, path, []}, fn step, {file, path, left} ->
+        case run_step(file, step, path, opts) do
+          {file, ^path} -> {file, path, left}
+          {file, changed} -> {file, changed, [changed | left]}
+        end
+      end)
+
+    Enum.each(left, &File.rm/1)
+    file
   end
 
   defp normalize({module, step_opts}) when is_atom(module) and is_list(step_opts),
@@ -147,18 +167,29 @@ defmodule Storehouse.Analyzer do
     end
   end
 
+  # The file with the step's analysis, and the path the next steps read
+  # it from: a new one when the step changed it.
   defp run_step(file, {module, step_opts} = step, path, opts) do
     name = name(step)
     meta = %{key: file.key, step: name}
-    path = if needs_file?(step), do: path
+    given = if needs_file?(step), do: path
 
     :telemetry.span([:storehouse, :analyze], meta, fn ->
-      {result, file} = keep(file, name, safely(module, file, path, step_opts))
+      {result, file, changed} =
+        case safely(module, file, given, step_opts) do
+          {:ok, result, changed} when is_binary(changed) ->
+            {result, file} = keep(file, name, {:ok, result})
+            {result, file, changed}
+
+          result ->
+            {result, file} = keep(file, name, result)
+            {result, file, path}
+        end
 
       with {:error, reason} <- result,
            do: Storehouse.Notify.notify(:failed, %{file: file, step: name, reason: reason}, opts)
 
-      {file, Map.merge(meta, outcome(result))}
+      {{file, changed}, Map.merge(meta, outcome(result))}
     end)
   end
 

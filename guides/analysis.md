@@ -100,6 +100,39 @@ Storehouse.Ecto.analyze_later(Repo, user, :avatar, [MyApp.Analyzers.Colors])
 `update/3` and `insert/3` analyze only the files the save put in the
 field.
 
+## A step that changes the file
+
+Analysis reads a file and leaves it as it is, with one exception you add
+yourself: `Storehouse.Analyzer.EditMetadata` edits the metadata inside a
+JPEG (`Storehouse.JPEG`) and writes the file back over the original.
+It is never run unless named, and it never re-encodes the image: the
+pixels are the same ones, byte for byte.
+
+```elixir
+steps = [
+  # Before anything reads it: the steps after it read the edited file.
+  {Storehouse.Analyzer.EditMetadata, strip: :gps, put: %{copyright: "© Ana Sousa"}},
+  MyApp.Analyzers.Exif
+]
+
+Storehouse.store(upload.path, analyze: steps)
+```
+
+`strip: {:keep, [:orientation, :copyright]}` keeps only the tags named
+and removes XMP, IPTC and comments too. Other formats (PNG, WebP, HEIC)
+are skipped, and a JPEG that cannot be read fails the step and is left as
+it was.
+
+The file's `:checksum` stays the one of the upload, so `:existing` still
+finds the same photo uploaded again. The step's result has the stored
+file's own `"checksum"` and `"bytes"` now:
+
+```elixir
+Storehouse.File.analyzed(file, :edit_metadata)
+#=> %{"changed" => true, "stripped" => "gps", "put" => ["copyright"],
+#     "bytes" => 2_144, "checksum" => "q1…="}
+```
+
 ## With Oban
 
 `Storehouse.Tasks` keeps its work in memory: a deploy in the middle of it

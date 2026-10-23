@@ -95,6 +95,9 @@ It gives your app:
   pages) run on a stored file, at once or out of the request, in a
   process of your app's or in Oban, their results kept in its metadata
   and saved in its record's column;
+* **a photo's metadata edited without re-encoding it**, when you ask:
+  where it was taken removed, only a few tags kept, an author's name
+  written in, in a JPEG's own segments, its image data untouched;
 * **what happens to files, as it happens**: a file stored, its analysis
   done or failed, a file deleted, told to a function of yours or
   broadcast on your app's PubSub, on a topic you choose (an account's);
@@ -233,6 +236,7 @@ another library is welcome as an issue.
 | LiveView uploads | Yes | No | No | Partly | No |
 | Reading a file back | Yes | Yes | Yes | Yes | Yes |
 | A file's own metadata | Yes, kept apart from the analysis's | No | Yes | Yes | Yes, shared with the analysis's |
+| A photo's location removed, its credit written, without re-encoding | Yes, a step you add (JPEG) | Only by re-encoding, with ImageMagick | No | Only by re-encoding | Only by re-encoding |
 | Several stores at once | Not yet ([#1](https://github.com/hattoriai/storehouse/issues/1)) | Per uploader | Per file | Yes | One at a time |
 | Work after the upload, analysis | Yes: steps of your own, in a process of your app's or in Oban | No | No | Yes | Yes, on Oban |
 | Variants | Not yet ([#6](https://github.com/hattoriai/storehouse/issues/6)) | Made at upload | No | Yes | On demand |
