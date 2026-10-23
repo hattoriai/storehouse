@@ -81,8 +81,9 @@ header is signed, so add `cache-control` to the bucket's CORS
 `AllowedHeaders`), streamed in, or promoted from the cache. A call's
 `:cache_control` (`Storehouse.store/2`, `Storehouse.presign_upload/4`)
 takes the store's place for one file. `Storehouse.Local.Plug` has
-`cache_control:` of its own, and `Storehouse.Variants.Plug` sends a year
-already.
+`cache_control:` of its own (but for a private store, whose files are
+`private` and kept no longer than their signed URL), and
+`Storehouse.Variants.Plug` sends a year already.
 
 ### Forgetting a file deleted
 

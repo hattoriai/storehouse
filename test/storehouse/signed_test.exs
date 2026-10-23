@@ -195,6 +195,19 @@ defmodule Storehouse.SignedTest do
       assert send(:get, String.replace(url, "a.png", "b.png"), opts).status == 403
     end
 
+    test "a private store's file is never for a shared cache, nor past its URL" do
+      # Even with a public Cache-Control, meant for a CDN in front.
+      opts = FilePlug.init(private: true, cache_control: "public, max-age=31536000, immutable")
+
+      {:ok, url} = Storehouse.signed_url("2026/10/a.png", expires_in: 60)
+      [cache] = get_resp_header(send(:get, url, opts), "cache-control")
+      assert "private, max-age=" <> left = cache
+      assert String.to_integer(left) in 58..60
+
+      {:ok, url} = Storehouse.signed_url("2026/10/a.png", expires_in: 86_400)
+      assert get_resp_header(send(:get, url, opts), "cache-control") == ["private, max-age=3600"]
+    end
+
     test "names a download, and never shows inline what a browser should not", %{public: opts} do
       {:ok, url} = Storehouse.signed_url("2026/10/a.png", filename: "Small board.png")
 

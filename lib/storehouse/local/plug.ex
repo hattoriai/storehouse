@@ -24,7 +24,9 @@ defmodule Storehouse.Local.Plug do
     * `:root` - the directory. The default is the configured `:root`.
     * `:cache_control` - the whole `Cache-Control` header, in place of
       `private, max-age=…`: `"public, max-age=31536000, immutable"` for a
-      CDN in front.
+      CDN in front. Not with `private: true`: a private store's files are
+      `private`, kept no longer than their URL's signature, so that no
+      shared cache serves one after it expires.
     * `:cache_tag` - `true` sends each file's `Cache-Tag`
       (`Storehouse.Purge.cache_tag/1`), for a purge by tag.
     * `:max_age` - the `max-age` of the `Cache-Control` header, in seconds.
@@ -121,7 +123,7 @@ defmodule Storehouse.Local.Plug do
         path,
         size,
         disposition,
-        Keyword.put(opts, :key, Path.join(segments))
+        opts |> Keyword.put(:key, Path.join(segments)) |> Keyword.put(:cache, cache(conn, opts))
       )
     else
       status when is_integer(status) -> halt_with(conn, status)
@@ -140,6 +142,18 @@ defmodule Storehouse.Local.Plug do
   end
 
   defp signed_get(_conn, _key, opts), do: if(opts[:private], do: 403, else: {:ok, nil})
+
+  # A private store's file is the signature's: kept by the browser alone, and
+  # no longer than the signature is valid.
+  defp cache(conn, opts) do
+    if opts[:private] do
+      {expires, ""} = Integer.parse(conn.query_params["expires"])
+      left = max(expires - System.system_time(:second), 0)
+      "private, max-age=#{min(left, opts[:max_age])}"
+    else
+      opts[:cache_control] || "private, max-age=#{opts[:max_age]}"
+    end
+  end
 
   defp upload(conn, segments, opts) do
     key = Enum.join(segments, "/")
@@ -262,10 +276,7 @@ defmodule Storehouse.Local.Plug do
 
     conn
     |> put_resp_content_type(type, nil)
-    |> put_resp_header(
-      "cache-control",
-      opts[:cache_control] || "private, max-age=#{opts[:max_age]}"
-    )
+    |> put_resp_header("cache-control", opts[:cache])
     |> Storehouse.Purge.put_cache_tag(opts[:cache_tag], opts[:key])
     |> put_resp_header("x-content-type-options", "nosniff")
     |> put_resp_header("content-security-policy", "default-src 'none'; sandbox")
