@@ -143,6 +143,24 @@ defmodule Storehouse.Adapter do
   @callback read_range(key(), first :: non_neg_integer(), last :: non_neg_integer()) ::
               {:ok, binary()} | {:error, term()}
 
+  @typedoc "A file `c:list/1` gives: its key, its size, and when it was last written."
+  @type entry :: %{key: key(), bytes: non_neg_integer(), modified_at: DateTime.t()}
+
+  @doc """
+  The files whose keys start with `prefix`, in the order of their keys, as
+  an enumerable that asks the store as it is taken (and raises
+  `Storehouse.ReadError` when the store fails then). Optional. See
+  `Storehouse.list/2`.
+  """
+  @callback list(prefix :: String.t()) :: {:ok, Enumerable.t()} | {:error, term()}
+
+  @doc """
+  Deletes the files with `keys`, at most a thousand, at once. A key with no
+  file is deleted. Optional: without it, `Storehouse.delete_prefix/2`
+  deletes one at a time with `c:delete/1`.
+  """
+  @callback delete_many([key()]) :: :ok | {:error, term()}
+
   @doc """
   The SHA-256 of the file with `key`, in Base64, as the store knows it, or
   `nil` when it keeps none: for a file uploaded straight to it. Optional.
@@ -179,6 +197,8 @@ defmodule Storehouse.Adapter do
                       read_head: 2,
                       head: 1,
                       read_range: 3,
+                      list: 1,
+                      delete_many: 1,
                       checksum: 1,
                       copy: 2,
                       stream_open: 2,

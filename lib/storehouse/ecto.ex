@@ -142,10 +142,14 @@ if Code.ensure_loaded?(Ecto.Changeset) do
     def files(%_{} = record),
       do: Enum.flat_map(file_fields(record), &List.wrap(Map.get(record, &1)))
 
-    @doc "Deletes files from the store (`Storehouse.delete/2`)."
+    @doc """
+    Deletes files from the store (`Storehouse.delete_later/2`): queued in
+    `Storehouse.Cleaner`, and tried again when the store fails, when the app
+    runs it; at once otherwise.
+    """
     @spec delete_files([Storehouse.File.t()], keyword()) :: :ok
     def delete_files(files, opts \\ []) do
-      Enum.each(files, &Storehouse.delete(&1.key, Keyword.take(opts, [:adapter])))
+      Enum.each(files, &Storehouse.delete_later(&1.key, Keyword.take(opts, [:adapter])))
     end
 
     @doc """

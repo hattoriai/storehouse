@@ -154,4 +154,39 @@ defmodule Storehouse.S3Test do
     assert Storehouse.read(file, adapter: S3) == {:error, :enoent}
     assert S3.read_range(file.key, 0, 10) == {:error, :enoent}
   end
+
+  test "lists the files under a prefix, a page at a time, and deletes them a thousand at a time" do
+    source = Path.join(System.tmp_dir!(), "storehouse-s3-list-#{System.unique_integer()}")
+    File.write!(source, "x")
+    on_exit(fn -> File.rm(source) end)
+
+    keys =
+      for n <- 1..1_050, do: "accounts/1/#{String.pad_leading(Integer.to_string(n), 4, "0")}.txt"
+
+    keys
+    |> Task.async_stream(&S3.put(&1, source, %{content_type: "text/plain"}), max_concurrency: 16)
+    |> Stream.run()
+
+    {:ok, _url} = S3.put("accounts/10/kept.txt", source, %{content_type: "text/plain"})
+
+    assert {:ok, entries} = Storehouse.list("accounts/1/", adapter: S3)
+    listed = Enum.to_list(entries)
+    assert Enum.map(listed, & &1.key) == keys
+    assert %{bytes: 1, modified_at: %DateTime{}} = hd(listed)
+
+    ref = :telemetry_test.attach_event_handlers(self(), [[:storehouse, :delete_prefix, :stop]])
+    assert Storehouse.delete_prefix("accounts/1/", adapter: S3) == {:ok, 1_050}
+    assert_received {[:storehouse, :delete_prefix, :stop], ^ref, _measurements, %{result: :ok}}
+
+    {:ok, left} = Storehouse.list("accounts/", adapter: S3)
+    assert Enum.map(left, & &1.key) == ["accounts/10/kept.txt"]
+
+    assert S3.delete_many(["accounts/10/kept.txt", "accounts/none.txt"]) == :ok
+
+    assert {:ok, []} =
+             with(
+               {:ok, s} <- Storehouse.list("accounts/", adapter: S3),
+               do: {:ok, Enum.to_list(s)}
+             )
+  end
 end

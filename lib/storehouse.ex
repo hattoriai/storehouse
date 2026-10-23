@@ -806,6 +806,142 @@ defmodule Storehouse do
     span(:delete, %{key: key, adapter: adapter}, fn -> adapter.delete(key) end)
   end
 
+  @doc """
+  The files whose keys start with `prefix`, as a stream of maps with their
+  `:key`, `:bytes` and `:modified_at` (a `DateTime`), in the order of their
+  keys: an account's files, the temporary ones, those of a file's
+  versions. The store is asked a page at a time, as the stream is taken,
+  and a store's error then raises `Storehouse.ReadError`. A key the store
+  has that `valid_key?/1` refuses is left out.
+
+  A prefix is a key, or the start of one: `"cache/"`, `"accounts/42/"`,
+  `"2026/10/0b6"`. Another gives `{:error, :invalid_prefix}`.
+
+  ## Options
+
+    * `:adapter` - as for `store/2`. The adapter must list files
+      (`c:Storehouse.Adapter.list/1`): `Storehouse.Local` and
+      `Storehouse.S3` do; another gives `{:error, :not_supported}`.
+  """
+  @spec list(String.t(), keyword()) :: {:ok, Enumerable.t()} | {:error, term()}
+  def list(prefix, opts \\ []) when is_binary(prefix) do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+
+    with true <- valid_prefix?(prefix) || {:error, :invalid_prefix},
+         :ok <- supported(adapter, :list, 1),
+         {:ok, entries} <- adapter.list(prefix) do
+      {:ok, Stream.filter(entries, &valid_key?(&1.key))}
+    end
+  end
+
+  @doc """
+  Deletes every file whose key starts with `prefix` (see `list/2`): an
+  account's files when it goes, every version of a file. A thousand keys
+  at a time where the store deletes many at once
+  (`c:Storehouse.Adapter.delete_many/1`), one at a time where it does not.
+  Gives `{:ok, count}`, the number of files deleted.
+
+  The prefix is never empty: `""` and `"/"` give `{:error, :invalid_prefix}`,
+  as every prefix `list/2` refuses does.
+
+  ## Options
+
+    * `:adapter` - as for `list/2`.
+  """
+  @spec delete_prefix(String.t(), keyword()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def delete_prefix(prefix, opts \\ []) when is_binary(prefix) do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+
+    span(:delete_prefix, %{prefix: prefix, adapter: adapter}, fn ->
+      with {:ok, entries} <- list(prefix, adapter: adapter) do
+        entries |> Stream.map(& &1.key) |> delete_keys(adapter)
+      end
+    end)
+  end
+
+  @doc false
+  # Deletes the keys of a stream, a thousand at a time: `{:ok, count}`.
+  def delete_keys(keys, adapter) do
+    keys
+    |> Stream.chunk_every(1_000)
+    |> Enum.reduce_while({:ok, 0}, fn batch, {:ok, count} ->
+      case delete_batch(adapter, batch) do
+        :ok -> {:cont, {:ok, count + length(batch)}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  rescue
+    error in Storehouse.ReadError -> {:error, error.reason}
+  end
+
+  defp delete_batch(adapter, keys) do
+    if supports?(adapter, :delete_many, 1),
+      do: adapter.delete_many(keys),
+      else: Enum.reduce_while(keys, :ok, &delete_one(adapter, &1, &2))
+  end
+
+  defp delete_one(adapter, key, :ok) do
+    case adapter.delete(key) do
+      :ok -> {:cont, :ok}
+      error -> {:halt, error}
+    end
+  end
+
+  @doc """
+  Deletes the file with `key` later, and again until the store answers:
+  a file replaced or removed, whose record is already saved. With
+  `Storehouse.Cleaner` in the app's supervision tree, the deletion is
+  queued there and retried when the store fails; without it, the file is
+  deleted at once, as `delete/2` does.
+
+  Gives `:ok`, or `{:error, :invalid_key}` for a key `valid_key?/1`
+  refuses. Takes `:adapter`, as `delete/2` does.
+  """
+  @spec delete_later(Storehouse.Adapter.key(), keyword()) :: :ok | {:error, term()}
+  def delete_later(key, opts \\ []) when is_binary(key) do
+    if valid_key?(key),
+      do: Storehouse.Cleaner.queue({:key, key}, opts),
+      else: {:error, :invalid_key}
+  end
+
+  @doc """
+  As `delete_later/2`, for every file whose key starts with `prefix`
+  (`delete_prefix/2`): an account's files when it goes. Gives `:ok`, or
+  `{:error, :invalid_prefix}`.
+  """
+  @spec delete_prefix_later(String.t(), keyword()) :: :ok | {:error, term()}
+  def delete_prefix_later(prefix, opts \\ []) when is_binary(prefix) do
+    if valid_prefix?(prefix),
+      do: Storehouse.Cleaner.queue({:prefix, prefix}, opts),
+      else: {:error, :invalid_prefix}
+  end
+
+  @doc """
+  Whether `prefix` is a key or the start of one, for `list/2` and
+  `delete_prefix/2`: never empty, never `"/"`.
+
+  ## Examples
+
+      iex> Storehouse.valid_prefix?("accounts/42/")
+      true
+
+      iex> Storehouse.valid_prefix?("2026/10/0b6")
+      true
+
+      iex> Storehouse.valid_prefix?("/")
+      false
+
+      iex> Storehouse.valid_prefix?("../")
+      false
+
+  """
+  @spec valid_prefix?(term()) :: boolean()
+  def valid_prefix?(prefix) when is_binary(prefix),
+    do:
+      prefix |> String.trim_trailing("/") |> valid_key?() and not String.ends_with?(prefix, "//")
+
+  def valid_prefix?(_prefix), do: false
+
   # A span of telemetry events (see the module doc): its outcome in the
   # stop event's metadata.
   defp span(event, meta, fun) do

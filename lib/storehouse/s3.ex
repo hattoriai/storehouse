@@ -228,6 +228,105 @@ defmodule Storehouse.S3 do
     end
   end
 
+  # A page of ListObjectsV2 at a time, as the stream is taken.
+  @impl Storehouse.Adapter
+  def list(prefix) do
+    {:ok, Stream.resource(fn -> :first end, &list_page(prefix, &1), fn _token -> :ok end)}
+  end
+
+  defp list_page(_prefix, :done), do: {:halt, :done}
+
+  defp list_page(prefix, token) do
+    params =
+      %{"list-type" => "2", "prefix" => prefix}
+      |> then(&if token == :first, do: &1, else: Map.put(&1, "continuation-token", token))
+
+    case request(:get, query(bucket_uri(), params), [], nil) do
+      {:ok, 200, _headers, body} ->
+        {listed(body), next_token(body)}
+
+      {:ok, status, _headers, body} ->
+        raise Storehouse.ReadError, key: prefix, reason: {:s3, status, body}
+
+      {:error, reason} ->
+        raise Storehouse.ReadError, key: prefix, reason: reason
+    end
+  end
+
+  defp listed(body) do
+    for [_all, contents] <- Regex.scan(~r{<Contents>(.*?)</Contents>}s, body) do
+      %{
+        key: contents |> tag("Key") |> unescape(),
+        bytes: contents |> tag("Size") |> String.to_integer(),
+        modified_at: contents |> tag("LastModified") |> modified_at()
+      }
+    end
+  end
+
+  defp next_token(body) do
+    if tag(body, "IsTruncated") == "true",
+      do: unescape(tag(body, "NextContinuationToken")),
+      else: :done
+  end
+
+  defp tag(xml, name) do
+    case Regex.run(~r{<#{name}>(.*?)</#{name}>}s, xml) do
+      [_all, value] -> value
+      nil -> ""
+    end
+  end
+
+  defp modified_at(text) do
+    case DateTime.from_iso8601(text) do
+      {:ok, at, _offset} -> at
+      {:error, _reason} -> DateTime.from_unix!(0)
+    end
+  end
+
+  defp unescape(text),
+    do:
+      text
+      |> String.replace("&lt;", "<")
+      |> String.replace("&gt;", ">")
+      |> String.replace("&quot;", "\"")
+      |> String.replace("&apos;", "'")
+      |> String.replace("&amp;", "&")
+
+  # DeleteObjects, quietly: the answer names only the keys not deleted.
+  @impl Storehouse.Adapter
+  def delete_many([]), do: :ok
+
+  def delete_many(keys) when length(keys) <= 1_000 do
+    body =
+      "<Delete><Quiet>true</Quiet>" <>
+        Enum.map_join(keys, "", &"<Object><Key>#{escape(&1)}</Key></Object>") <>
+        "</Delete>"
+
+    headers = [
+      {"content-type", "application/xml"},
+      {"content-md5", Base.encode64(:crypto.hash(:md5, body))}
+    ]
+
+    case request(:post, query(bucket_uri(), %{"delete" => ""}), headers, body) do
+      {:ok, 200, _headers, answer} ->
+        case Regex.scan(~r{<Error>.*?<Key>(.*?)</Key>.*?</Error>}s, answer) do
+          [] ->
+            :ok
+
+          errors ->
+            {:error, {:not_deleted, Enum.map(errors, fn [_all, key] -> unescape(key) end)}}
+        end
+
+      {:ok, status, _headers, answer} ->
+        {:error, {:s3, status, answer}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp bucket_uri, do: %{base_uri("") | query: nil}
+
   defp header(headers, name, default) do
     case List.keyfind(headers, name, 0) do
       {_name, value} -> value

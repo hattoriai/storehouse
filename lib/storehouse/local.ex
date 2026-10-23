@@ -51,6 +51,9 @@ defmodule Storehouse.Local do
 
   @default_prefix "/uploads"
 
+  # A file `stream_open/2` writes to, until `stream_close/1` renames it.
+  @part ~r/\.part-\d+\z/
+
   @impl Storehouse.Adapter
   def put(key, path, _meta) do
     with {:ok, destination} <- path(key),
@@ -204,6 +207,42 @@ defmodule Storehouse.Local do
         {:error, reason} -> {:error, reason}
       end
     end
+  end
+
+  # The files under the prefix's directory, but for those of streams not
+  # closed yet (`stream_open/2`), in the order of their keys.
+  @impl Storehouse.Adapter
+  def list(prefix) do
+    root = root()
+    dir = if String.ends_with?(prefix, "/"), do: prefix, else: Path.dirname(prefix)
+
+    entries =
+      Path.join([root, dir, "**"])
+      |> Path.wildcard(match_dot: true)
+      |> Enum.flat_map(fn path ->
+        key = Path.relative_to(path, root)
+
+        with true <- String.starts_with?(key, prefix) and not Regex.match?(@part, key),
+             {:ok, %File.Stat{type: :regular, size: size, mtime: mtime}} <-
+               File.stat(path, time: :posix) do
+          [%{key: key, bytes: size, modified_at: DateTime.from_unix!(mtime)}]
+        else
+          _other -> []
+        end
+      end)
+      |> Enum.sort_by(& &1.key)
+
+    {:ok, entries}
+  end
+
+  @impl Storehouse.Adapter
+  def delete_many(keys) do
+    Enum.reduce_while(keys, :ok, fn key, :ok ->
+      case delete(key) do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
   end
 
   @impl Storehouse.Adapter

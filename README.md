@@ -73,6 +73,10 @@ It gives your app:
 * **files from an address**, from the hosts you allow only, with
   redirects checked and the download stopped at the size limit: an image
   pasted by its address, a file an agent names;
+* **cleanup**: files listed and deleted by prefix (an account's, a
+  thousand at a time on S3), deletions tried again until the store
+  answers, and temporary files of forms never saved swept, by
+  `Storehouse.Cleaner`, a process of your app's, with no cron;
 * **files read back**: a file's size and type without reading it, its
   bytes all at once, as a stream a chunk at a time, or to a path, each
   refused past a size limit before a byte is read;
@@ -223,8 +227,8 @@ another library is welcome as an issue.
   length and size, audio; metadata of the app's own, read again later.
 * **Live progress beyond the upload**: the versions being made, a video
   being read, for everyone who sees the file (PubSub).
-* **Cleanup of unused files**: deleted files and abandoned uploads, by a
-  supervised process, with no cron.
+* **Cleanup of unused files**: the files no record uses any more, found
+  by comparing the app's records with the store.
 * **Resumable uploads** that survive a reconnect (and the tus protocol),
   and multipart uploads straight from the browser, for very large files.
 * **Endpoints for other clients**: presign and upload endpoints, for Uppy
