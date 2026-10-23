@@ -104,7 +104,8 @@ field.
 
 Analysis reads a file and leaves it as it is, with one exception you add
 yourself: `Storehouse.Analyzer.EditMetadata` edits the metadata inside a
-JPEG (`Storehouse.JPEG`) and writes the file back over the original.
+JPEG, PNG or WebP (`Storehouse.JPEG`, `Storehouse.PNG`, `Storehouse.WebP`)
+and writes the file back over the original.
 It is never run unless named, and it never re-encodes the image: the
 pixels are the same ones, byte for byte. Only the metadata is read into
 memory; the image data is copied from file to file, so a 50 MB photo
@@ -121,12 +122,12 @@ Storehouse.store(upload.path, analyze: steps)
 ```
 
 `strip: {:keep, [:orientation, :copyright]}` keeps only the tags named
-and removes XMP, IPTC and comments too. Other formats (PNG, WebP, HEIC)
-are skipped, and a JPEG that cannot be read fails the step and is left as
-it was.
+and removes XMP, IPTC, comments and other text too. Other formats (HEIC,
+AVIF, TIFF) are skipped, and a file that cannot be read fails the step and
+is left as it was.
 
 What makes the changes is a `Storehouse.MetadataEditor`. Storehouse's
-own edits JPEG; for other types (HEIC, TIFF, a camera's raw files),
+own edits JPEG, PNG and WebP; for other types (HEIC, TIFF, a camera's raw files),
 or another tool altogether, an editor of your app's takes its place, for
 every step or for one, with no other change:
 

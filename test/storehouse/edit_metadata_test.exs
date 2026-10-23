@@ -76,14 +76,25 @@ defmodule Storehouse.Analyzer.EditMetadataTest do
     assert Memory.get(file.key) == written
   end
 
-  test "skipped with nothing asked, and for a file that is not a JPEG" do
+  test "skipped with nothing asked, and for a type the editor does not edit" do
     {:ok, file} = store(@camera, [EditMetadata])
     assert %Storehouse.Analysis{status: :skipped} = Storehouse.File.analysis(file, :edit_metadata)
     assert stored(file) == File.read!(@camera)
 
-    {:ok, png} = store(@png, [{EditMetadata, strip: :gps}])
-    assert %Storehouse.Analysis{status: :skipped} = Storehouse.File.analysis(png, :edit_metadata)
-    assert stored(png) == File.read!(@png)
+    heic = Path.expand("../fixtures/small.heic", __DIR__)
+    {:ok, file} = store(heic, [{EditMetadata, strip: :gps}])
+    assert %Storehouse.Analysis{status: :skipped} = Storehouse.File.analysis(file, :edit_metadata)
+    assert stored(file) == File.read!(heic)
+  end
+
+  test "a PNG and a WebP are edited too" do
+    for name <- ["photo.png", "photo.webp"] do
+      path = Path.expand("../fixtures/exif/" <> name, __DIR__)
+      {:ok, file} = store(path, [{EditMetadata, strip: :gps}])
+
+      assert %{"changed" => true} = Storehouse.File.analyzed(file, :edit_metadata)
+      refute stored(file) =~ "exif:GPS"
+    end
   end
 
   defmodule Copy do

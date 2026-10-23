@@ -24,6 +24,14 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   the step's `:editor` or `config :storehouse, :metadata_editor` names
   one of the app's, around ExifTool for other types. A step may now give
   `{:ok, result, path}`: the steps after it read the file it left.
+- PNG and WebP metadata, edited as a JPEG's: `Storehouse.PNG` (Exif,
+  XMP and text chunks, each with its checksum; written tags also as the
+  `Author`, `Copyright` and `Description` text readers show; an APNG's
+  frames copied) and `Storehouse.WebP` (Exif and XMP chunks, and the
+  `VP8X` header's flags; a simple WebP given a header when it is given
+  Exif; an animation's frames copied), both reading only the metadata
+  chunks into memory. `Storehouse.MetadataEditor.Builtin` edits all
+  three.
 - Reading a file back: `Storehouse.head/2` (its size, stored type and
   checksum, without reading it), `Storehouse.read/2` (all of it, refused
   past `:max_bytes` before a byte is read), `Storehouse.stream/2` (a chunk

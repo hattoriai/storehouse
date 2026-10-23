@@ -2,7 +2,8 @@ defmodule Storehouse.MetadataEditor do
   @moduledoc """
   What edits the metadata inside a stored file for the
   `Storehouse.Analyzer.EditMetadata` step: Storehouse's own
-  (`Storehouse.MetadataEditor.Builtin`, in Elixir, for JPEG), or one of
+  (`Storehouse.MetadataEditor.Builtin`, in Elixir, for JPEG, PNG and
+  WebP), or one of
   the app's, around ExifTool, a NIF, a service.
 
   The changes are Storehouse's, whichever editor makes them:
