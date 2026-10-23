@@ -1,9 +1,10 @@
 defmodule Storehouse.Cleaner do
   @moduledoc """
   Deletes files later, and again until the store answers
-  (`Storehouse.delete_later/2`, `Storehouse.delete_prefix_later/2`), and
-  sweeps the temporary files of forms never saved: a process of the app's
-  own, with no job queue and no cron.
+  (`Storehouse.delete_later/2`, `Storehouse.delete_prefix_later/2`), copies
+  a mirror's files the same way (`Storehouse.Mirror`), and sweeps the
+  temporary files of forms never saved: a process of the app's own, with
+  no job queue and no cron.
 
       # lib/my_app/application.ex
       children = [
@@ -187,6 +188,10 @@ defmodule Storehouse.Cleaner do
   defp work(%{target: target, adapter: adapter}, _sweep), do: run(target, adapter)
 
   defp run({:key, key}, adapter), do: Storehouse.delete(key, adapter: adapter)
+
+  defp run({:mirror, {key, primary, mirror}}, _adapter),
+    do: Storehouse.Mirror.sync(key, primary, mirror)
+
   defp run({:prefix, prefix}, adapter), do: Storehouse.delete_prefix(prefix, adapter: adapter)
 
   defp finished(state, _job, :ok), do: state
@@ -203,7 +208,7 @@ defmodule Storehouse.Cleaner do
       Process.send_after(self(), {:retry, %{job | attempt: attempt + 1}}, state.backoff.(attempt))
     else
       Logger.warning(
-        "Storehouse.Cleaner: gave up deleting #{inspect(job.target)} after #{attempt} attempts: #{inspect(reason)}"
+        "Storehouse.Cleaner: gave up #{doing(job.target)} after #{attempt} attempts: #{inspect(reason)}"
       )
 
       :telemetry.execute([:storehouse, :cleaner, :discarded], %{attempts: attempt}, %{
@@ -215,6 +220,11 @@ defmodule Storehouse.Cleaner do
 
     state
   end
+
+  defp doing({:mirror, {key, _primary, mirror}}),
+    do: "copying #{inspect(key)} to #{inspect(mirror)}"
+
+  defp doing(target), do: "deleting #{inspect(target)}"
 
   defp backoff(attempt), do: min(1_000 * Integer.pow(2, attempt - 1), 300_000)
 end

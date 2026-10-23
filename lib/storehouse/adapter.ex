@@ -192,7 +192,16 @@ defmodule Storehouse.Adapter do
   @doc "Gives up a streamed file: nothing of it stays in the store."
   @callback stream_abort(stream :: term()) :: :ok
 
-  @optional_callbacks presign_upload: 3,
+  @doc """
+  Told that a file the browser uploaded straight to the store
+  (`c:presign_upload/3`) was checked and kept (`Storehouse.verify_upload/2`):
+  for a store that does more with a file it takes (`Storehouse.Mirror`
+  copies it to its mirrors). Optional.
+  """
+  @callback uploaded(key()) :: :ok
+
+  @optional_callbacks uploaded: 1,
+                      presign_upload: 3,
                       signed_url: 2,
                       read_head: 2,
                       head: 1,

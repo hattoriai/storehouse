@@ -9,6 +9,18 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Added
 
+- Moving between stores: `Storehouse.copy/2` copies a file from one
+  store to another (in S3 itself between buckets the same credentials
+  reach, on the disk between two local stores, else a chunk at a time
+  with its checksum checked) and `Storehouse.copy_prefix/2` copies many,
+  several at once, skipping those already there, so it can run again;
+  `mix storehouse.copy` runs it with its progress. `Storehouse.Mirror` is
+  a store that writes to a primary and copies each file to its mirrors
+  through `Storehouse.Cleaner`, retried until they answer, never failing
+  the primary's write. The optional adapter callback `uploaded/1` is told
+  of a file uploaded straight to the store once `verify_upload/2` keeps
+  it. A file streamed to S3 in one request now keeps its checksum there
+  too.
 - Editing a photo's metadata without re-encoding it, only when asked:
   `Storehouse.JPEG` removes the location (`strip(jpeg, :gps)`, the Exif
   GPS directory zeroed and XMP's GPS properties removed), keeps only the

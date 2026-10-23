@@ -570,6 +570,7 @@ defmodule Storehouse do
            span(:verify_upload, %{key: key, adapter: adapter}, fn ->
              do_verify_upload(key, adapter, opts)
            end) do
+      if supported(adapter, :uploaded, 1) == :ok, do: adapter.uploaded(key)
       Storehouse.Notify.notify(:stored, %{file: file}, opts)
       {:ok, file}
     end
@@ -1155,6 +1156,65 @@ defmodule Storehouse do
       {:ok, Stream.filter(entries, &valid_key?(&1.key))}
     end
   end
+
+  @doc """
+  Copies the file with `key` from one store to another, under the same
+  key: to move to another provider, keep a second copy, or bring a
+  production account's files into development.
+
+      Storehouse.copy("2026/10/0b6…-board.png", from: MyApp.OldMedia, to: MyApp.Media)
+      #=> {:ok, :copied}
+
+  A file the destination has already, the same size and, where both
+  stores keep one, the same checksum, is not copied again: `{:ok,
+  :skipped}`. Its type stays as it was.
+
+  Two buckets the same credentials reach (`Storehouse.S3`), or two folders
+  of this disk (`Storehouse.Local`), copy it themselves, with no byte
+  through the app. Otherwise it is read a chunk at a time (`stream/2`)
+  into the destination (`c:Storehouse.Adapter.stream_open/2`, else a
+  temporary file and `c:Storehouse.Adapter.put/3`), and its checksum,
+  computed on the way, must be the source's, else nothing is kept and
+  the copy gives `{:error, :checksum_mismatch}`.
+
+  ## Options
+
+    * `:from` and `:to` - the stores, two of them. Both must read files
+      back (`head/2`).
+    * `:verify` - when either store keeps no checksum of the whole file
+      (the local disk; S3, of a file sent in parts), read both to compare
+      a file of the same size before it is skipped. The default is `false`:
+      the same size is the same file.
+  """
+  @spec copy(Storehouse.Adapter.key(), keyword()) ::
+          {:ok, :copied | :skipped} | {:error, term()}
+  def copy(key, opts) when is_binary(key), do: Storehouse.Copy.copy(key, opts)
+
+  @doc """
+  Copies every file whose key starts with `prefix` (see `list/2`) from one
+  store to another (`copy/2`), several at once. Files the destination has
+  already are skipped, so it can be run again: after an error, or to
+  catch up with what was written since.
+
+      Storehouse.copy_prefix("accounts/42/", from: MyApp.Media, to: MyApp.DevMedia)
+      #=> {:ok, %{copied: 1_204, skipped: 0, failed: []}}
+
+  `""` copies every file. `mix storehouse.copy` runs it from the command
+  line, with its progress.
+
+  ## Options
+
+    * `:from`, `:to` and `:verify` - as for `copy/2`.
+    * `:max_concurrency` - how many files are copied at once. The default
+      is 4.
+    * `:on_progress` - a function of each file's key and result
+      (`{:ok, :copied}`, …), as each is done.
+  """
+  @spec copy_prefix(String.t(), keyword()) ::
+          {:ok, %{copied: non_neg_integer(), skipped: non_neg_integer(), failed: list()}}
+          | {:error, term()}
+  def copy_prefix(prefix, opts) when is_binary(prefix),
+    do: Storehouse.Copy.copy_prefix(prefix, opts)
 
   @doc """
   Deletes every file whose key starts with `prefix` (see `list/2`): an
