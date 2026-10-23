@@ -52,10 +52,12 @@ test("presigns the files added together, sends them, and registers them in a bat
   ]);
 
   assert.equal(w.calls.presign.length, 1);
-  assert.deepEqual(w.calls.presign[0].map((i) => [i.name, i.type, i.bytes]), [["a.jpg", "image/jpeg", 3], ["b.jpg", "image/jpeg", 4]]);
+  // In the order their hashes are done, which is not the order added.
+  const byName = (a, b) => (a.name < b.name ? -1 : 1);
+  assert.deepEqual([...w.calls.presign[0]].sort(byName).map((i) => [i.name, i.type, i.bytes]), [["a.jpg", "image/jpeg", 3], ["b.jpg", "image/jpeg", 4]]);
   assert.match(w.calls.presign[0][0].checksum, /^[0-9a-f]{64}$/);
   assert.equal(w.calls.register.length, 1);
-  assert.deepEqual(w.calls.register[0], [{ key: "k/a.jpg", name: "a.jpg" }, { key: "k/b.jpg", name: "b.jpg" }]);
+  assert.deepEqual([...w.calls.register[0]].sort(byName), [{ key: "k/a.jpg", name: "a.jpg" }, { key: "k/b.jpg", name: "b.jpg" }]);
   assert.equal(uploads[0].fraction, 1);
 });
 
