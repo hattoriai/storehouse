@@ -103,9 +103,10 @@ It gives your app:
   bytes all at once, as a stream a chunk at a time, or to a path, each
   refused past a size limit before a byte is read;
 * **work after the upload**: steps of your own (an image's EXIF, a PDF's
-  pages) run on a stored file, at once or out of the request, in a
-  process of your app's or in Oban, their results kept in its metadata
-  and saved in its record's column;
+  pages) run on a stored file, at once or out of the request, their
+  results kept with it and saved in its record's column; and run again
+  over a whole table's files, a batch at a time, only where they are
+  missing (`mix storehouse.reprocess`);
 * **a photo's metadata edited without re-encoding it**, when you ask:
   where it was taken removed, only a few tags kept, an author's name
   written in, in a JPEG's, PNG's or WebP's own segments and chunks, its
@@ -250,7 +251,7 @@ another library is welcome as an issue.
 | A file's own metadata | Yes, kept apart from the analysis's | No | Yes | Yes | Yes, shared with the analysis's |
 | A photo's location removed, its credit written, without re-encoding | Yes, a step you add: JPEG, PNG and WebP built in, an editor of yours (ExifTool) for other types | Only by re-encoding, with ImageMagick | No | Only by re-encoding | Only by re-encoding |
 | Several stores at once | Yes: named stores, a store per field, files copied and mirrored between them | Per uploader | Per file | Yes | One at a time |
-| Work after the upload, analysis | Yes: steps of your own, in a process of your app's or in Oban | No | No | Yes | Yes, on Oban |
+| Work after the upload, analysis | Yes: steps of your own, on a runner you choose (Oban's by default), run again over a table's files | No | No | Yes | Yes, on Oban |
 | Variants | Not yet ([#6](https://github.com/hattoriai/storehouse/issues/6)) | Made at upload | No | Yes | On demand |
 | Placeholders while an image loads | Not yet ([#4](https://github.com/hattoriai/storehouse/issues/4)) | No | No | Yes | No |
 | A table of files | Not yet ([#16](https://github.com/hattoriai/storehouse/issues/16)) | No | No | Yes | Yes |

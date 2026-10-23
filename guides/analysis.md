@@ -92,6 +92,29 @@ Storehouse.Ecto.analyze_later(Repo, user, :avatar, [MyApp.Analyzers.Colors])
 `update/3` and `insert/3` analyze only the files the save put in the
 field.
 
+## Again, over files stored before
+
+A step added a year in, a step that failed, files from before analysis
+existed: `Storehouse.Ecto.reprocess/5` runs steps over the files of a
+field in every record of a table, a batch at a time in the order of the
+primary key, so a table of any size takes the memory of a batch:
+
+```elixir
+Storehouse.Ecto.reprocess(Repo, MyApp.Photo, :image, [MyApp.Analyzers.Placeholder])
+#=> {:ok, %{records: 10_000, files: 9_412, skipped: 588, failed: []}}
+```
+
+A file that has every step's result already is skipped, so it can be
+stopped and run again, and does only what is missing; `force: true` runs
+every one again. Each file is a job of the app's runner; `now: true` runs
+them where it is called, and saves their results before it returns. From
+the command line, with its progress:
+
+```sh
+mix storehouse.reprocess --repo MyApp.Repo --schema MyApp.Photo --field image \
+  --step MyApp.Analyzers.Placeholder --now
+```
+
 ## A step that changes the file
 
 Analysis reads a file and leaves it as it is, with one exception you add

@@ -9,6 +9,13 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Added
 
+- Reprocessing: `Storehouse.Ecto.reprocess/5` runs analysis steps over
+  the files of a field in every record a query gives, a batch at a time
+  in the order of the primary key, skipping files that have every step's
+  result already (or with `:force`, none), so it can be stopped and run
+  again; as jobs of the app's runner, or `now: true` where it is called,
+  with `:after` to start after a primary key and `:on_progress`.
+  `mix storehouse.reprocess` runs it with its progress.
 - Work out of the request, on a runner the app chooses
   (`Storehouse.Runner`): a file's analysis later, deletions later and a
   mirror's copies are jobs (`Storehouse.Job`, a worker and arguments JSON

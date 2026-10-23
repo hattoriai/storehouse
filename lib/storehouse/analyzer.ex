@@ -133,6 +133,12 @@ defmodule Storehouse.Analyzer do
 
   defp normalize(module) when is_atom(module), do: {module, []}
 
+  @doc false
+  # Whether a step of these has yet to run on the file (or failed).
+  @spec pending?(Storehouse.File.t(), [step()]) :: boolean()
+  def pending?(%Storehouse.File{} = file, steps),
+    do: Enum.any?(steps, &(not done?(file, normalize(&1))))
+
   # Done: ran, and either read the file or found it is not one for it.
   defp done?(file, step) do
     case Storehouse.File.analysis(file, name(step)) do
