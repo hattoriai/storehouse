@@ -9,6 +9,7 @@ defmodule Storehouse.TusTest do
   alias Storehouse.Memory
   alias Storehouse.Plug.Presign
   alias Storehouse.Tus.Plug, as: TusPlug
+  alias Storehouse.Tus.State.ETS
 
   @fixtures Path.expand("../fixtures", __DIR__)
   @harbour File.read!(Path.join(@fixtures, "harbour.jpg"))
@@ -286,11 +287,11 @@ defmodule Storehouse.TusTest do
 
     assert {:ok, 1} = Storehouse.Tus.sweep()
     assert_received {:aborted, "accounts/7/" <> _, "u1"}
-    assert Storehouse.Tus.State.ETS.get(id) == nil
+    assert ETS.get(id) == nil
 
     # One whose store raises: the sweep goes on, and so does the process.
-    broken = %{Storehouse.Tus.State.ETS.get(create(opts, 10)) | adapter: :no_such_store}
-    Storehouse.Tus.State.ETS.put(broken)
+    broken = %{ETS.get(create(opts, 10)) | adapter: :no_such_store}
+    ETS.put(broken)
     _other = create(opts, 10)
     pid = Process.whereis(Storehouse.Tus)
 
