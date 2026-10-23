@@ -20,6 +20,34 @@ schema "users" do
 end
 ```
 
+## Coming from Active Storage
+
+Rails keeps files in tables of their own and attaches them to records.
+Storehouse keeps them in the record's own columns, so most of Active
+Storage's calls are a field and a function here:
+
+| Active Storage | Storehouse |
+|---|---|
+| `has_one_attached :avatar` | `field :avatar, Storehouse.Ecto.File` |
+| `has_many_attached :photos` | `field :photos, {:array, Storehouse.Ecto.File}, default: []` |
+| `user.avatar.attach(upload)` | `Storehouse.Ecto.put_file(changeset, :avatar, file)` |
+| `user.photos.attach(uploads)` | `Storehouse.Ecto.add_files(changeset, :photos, files)` |
+| `user.avatar.purge_later` | `Storehouse.Ecto.put_file(changeset, :avatar, nil)`, then `update/3` |
+| `user.photos.find(id).purge_later` | `Storehouse.Ecto.remove_file(changeset, :photos, key)`, then `update/3` |
+| `user.avatar.attached?` | `user.avatar != nil` |
+| Validating type and size | `:accept`, `:max_bytes`, `:max_pixels`, `:max_files` |
+| `url_for(user.avatar)` | `file.url`, or `Storehouse.signed_url/2` for a private file |
+| `rails_blob_path` that checks the person | `Storehouse.Redirect` ([Private files](private_files.md)) |
+| `user.avatar.variant(resize_to_limit: [200, 200])` | `Storehouse.variant_url/3`, by preset ([Variants](variants.md)) |
+| `user.avatar.download`, `open` | `Storehouse.read/2`, `stream/2`, `download/3` |
+| `metadata` from `analyze` | the file's `:analysis` ([After the upload](analysis.md)) |
+| Direct uploads | `Storehouse.Live.allow/3`, or the JSON endpoints ([Direct uploads](direct_uploads.md)) |
+| One blob attached to many records | the library, below ([A library of files](#a-library-of-files)) |
+
+A file removed from a record is deleted from the store once the save
+commits, as `purge_later` does. There is no detaching a file and keeping
+it: a file that should outlive its record belongs in the library.
+
 ## A file in a form
 
 The upload is temporary until the form is saved (`cache: true`), and
@@ -73,6 +101,76 @@ of the field, as any validation), and when the record is saved, makes it
 permanent: a copy in the store, from its temporary key to its permanent
 one, in the save's transaction. A copy that fails is an error of the
 field, and the save rolls back.
+
+## Many files in a record
+
+A list field holds a record's files in order: a listing's photos, a
+message's attachments. Add files from an upload to the ones the record
+has with `Storehouse.Ecto.add_files/4`, checked as `put_file/4` checks
+them; `:max_files` counts them all:
+
+```elixir
+def mount(%{"id" => id}, _session, socket) do
+  {:ok,
+   socket
+   |> assign(listing: Listings.get!(id))
+   |> Storehouse.Live.allow(:photos,
+     accept: ~w(.png .jpg .jpeg .webp),
+     max_entries: 10,
+     max_file_size: 20_000_000,
+     cache: true
+   )}
+end
+
+def handle_event("save", _params, socket) do
+  {socket, results} = Storehouse.Live.consume(socket, :photos, accept: Storehouse.Check.images())
+  files = for {_entry, {:ok, file}} <- results, do: file
+
+  socket.assigns.listing
+  |> Ecto.Changeset.change()
+  |> Storehouse.Ecto.add_files(:photos, files, accept: Storehouse.Check.images(), max_files: 20)
+  |> then(&Storehouse.Ecto.update(Repo, &1))
+  |> case do
+    {:ok, listing} -> {:noreply, assign(socket, listing: listing)}
+    {:error, changeset} -> {:noreply, assign(socket, form: to_form(changeset))}
+  end
+end
+```
+
+Take one out by its key with `Storehouse.Ecto.remove_file/3`. Its file is
+deleted once the save commits:
+
+```elixir
+def handle_event("remove", %{"key" => key}, socket) do
+  {:ok, listing} =
+    socket.assigns.listing
+    |> Ecto.Changeset.change()
+    |> Storehouse.Ecto.remove_file(:photos, key)
+    |> then(&Storehouse.Ecto.update(Repo, &1))
+
+  {:noreply, assign(socket, listing: listing)}
+end
+```
+
+The order is the list's. To reorder, put the same files back in the new
+order; nothing is copied or deleted:
+
+```elixir
+by_key = Map.new(listing.photos, &{&1.key, &1})
+photos = for key <- params["order"], file = by_key[key], do: file
+
+listing
+|> Ecto.Changeset.change()
+|> Storehouse.Ecto.put_file(:photos, photos)
+|> then(&Storehouse.Ecto.update(Repo, &1))
+```
+
+A caption for one of them goes to that file by its key, with
+`put_metadata/4` (see [Metadata of your own](#metadata-of-your-own)).
+
+A list field suits files that belong to one record. Files that many
+records share (a site's photographs, used by its stories and its pages)
+belong in [the library](#a-library-of-files), with a row each.
 
 ## Temporary, then permanent
 

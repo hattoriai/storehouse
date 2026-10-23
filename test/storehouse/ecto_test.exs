@@ -157,6 +157,78 @@ defmodule Storehouse.EctoTest do
     refute Enum.any?([png, webp], &there?(root, &1))
   end
 
+  test "files added to a list one upload at a time, and one taken out", %{root: root} do
+    {:ok, user} =
+      %User{}
+      |> change()
+      |> Storehouse.Ecto.add_files(:photos, upload("small.png"))
+      |> then(&Storehouse.Ecto.insert(Repo, &1))
+
+    [png] = user.photos
+
+    {:ok, user} =
+      user
+      |> change()
+      |> Storehouse.Ecto.add_files(:photos, [upload("small.gif"), upload("small.webp")])
+      |> then(&Storehouse.Ecto.update(Repo, &1))
+
+    # After those it had, each made permanent.
+    assert [^png, gif, webp] = user.photos
+    assert Enum.all?(user.photos, &(not Storehouse.cached?(&1) and there?(root, &1)))
+
+    {:ok, user} =
+      user
+      |> change()
+      |> Storehouse.Ecto.remove_file(:photos, gif.key)
+      |> then(&Storehouse.Ecto.update(Repo, &1))
+
+    assert Repo.get!(User, user.id).photos == [png, webp]
+    refute there?(root, gif)
+
+    # A key the field does not have changes nothing.
+    assert (user |> change() |> Storehouse.Ecto.remove_file(:photos, gif.key)).changes == %{}
+  end
+
+  test "a single file taken out, by the file", %{root: root} do
+    {:ok, user} = Storehouse.Ecto.insert(Repo, changeset(%User{}, %{}, upload("small.png")))
+    avatar = user.avatar
+
+    {:ok, user} =
+      Storehouse.Ecto.update(
+        Repo,
+        user |> change() |> Storehouse.Ecto.remove_file(:avatar, avatar)
+      )
+
+    assert Repo.get!(User, user.id).avatar == nil
+    refute there?(root, avatar)
+  end
+
+  test "at most :max_files, and only the new files checked" do
+    {:ok, user} =
+      %User{}
+      |> change()
+      |> Storehouse.Ecto.put_file(:photos, [upload("harbour.jpg")])
+      |> then(&Storehouse.Ecto.insert(Repo, &1))
+
+    too_many =
+      user
+      |> change()
+      |> Storehouse.Ecto.add_files(:photos, [upload("small.png"), upload("small.gif")],
+        max_files: 2
+      )
+
+    assert {"has too many files", [validation: :storehouse, reason: :too_many]} =
+             too_many.errors[:photos]
+
+    # The photo it had is larger than this limit; the new one is not.
+    added =
+      user
+      |> change()
+      |> Storehouse.Ecto.add_files(:photos, upload("small.png"), max_bytes: 10_000, max_files: 2)
+
+    assert added.valid?
+  end
+
   test "a form's params never put a file in a record" do
     params = %{
       "avatar" => %{

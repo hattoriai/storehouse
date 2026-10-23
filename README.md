@@ -10,8 +10,6 @@ makes. Storehouse checks each file by its contents, not its name, stores
 it on the local disk or in S3 (or R2, MinIO, Tigris), and serves it so it
 can never run a script on your app's origin.
 
-It is the storage behind Kotoba's attachments and Hakushi's images.
-
 > Early release. Before 1.0, a minor version may change the API.
 
 ## Install
@@ -70,6 +68,10 @@ user
 |> Storehouse.Ecto.put_file(:avatar, upload, accept: Storehouse.Check.images(), max_bytes: 5_000_000)
 |> then(&Storehouse.Ecto.update(Repo, &1))
 ```
+
+A list field (`{:array, Storehouse.Ecto.File}`) holds many, with
+`add_files/4` and `remove_file/3`. The [Ecto](guides/ecto.md) guide has
+both, and how each Active Storage call maps to Storehouse.
 
 Or store the files of a LiveView upload:
 

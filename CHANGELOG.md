@@ -7,6 +7,15 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+### Added
+
+- `Storehouse.Ecto.add_files/4` and `remove_file/3`: files added to a
+  list field after those the record has, and one taken out by its key,
+  deleted from the store once the record is saved. `:max_files` caps a
+  list field, an error of the field (`reason: :too_many`). The Ecto guide
+  shows a record with many files, and maps Active Storage's calls to
+  Storehouse's.
+
 ## [0.2.0] - 2026-10-23
 
 ### Security

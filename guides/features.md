@@ -17,7 +17,7 @@ Everything Storehouse does, in one table. Each guide tells more.
 | tus | resumable uploads through the app for the clients that speak tus (Uppy, tus-js-client, mobile), into the bucket a part at a time → [Uploads from any client](any_client.md#tus-through-the-app) |
 | Any client | JSON endpoints that presign and register files in batches; `storehouse/client` (also on npm, as `@hattoriai/storehouse`): checksums in a Web Worker, a few uploads at once, progress → [Uploads from any client](any_client.md) |
 | LiveView | `Storehouse.Live.consume/3` stores each finished entry once, cancels the refused ones, and gives a result for each → [LiveView](liveview.md) |
-| Ecto | a file in a column (`Storehouse.Ecto.File`), no table; temporary until the record is saved, then permanent; replaced and removed files deleted once the database has the change; metadata of your own (a caption, a credit) → [Ecto](ecto.md) |
+| Ecto | a file in a column (`Storehouse.Ecto.File`), or many in a list, added to (`add_files/4`), taken from (`remove_file/3`) and capped (`:max_files`), no table; temporary until the record is saved, then permanent; replaced and removed files deleted once the database has the change; metadata of your own (a caption, a credit) → [Ecto](ecto.md) |
 | A library of files | optional: one row per file, which records use it, a file in use never deleted → [Ecto](ecto.md#a-library-of-files) |
 | The same file again | found by its checksum before the upload, or when it is verified, and the one you have is returned → [Stores](stores.md#the-same-file-again) |
 | From a URL | only from the hosts you allow, redirects checked, stopped at the size limit → [Stores](stores.md#files-from-an-address) |
