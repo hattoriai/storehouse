@@ -31,7 +31,8 @@ def deps do
 end
 ```
 
-Storehouse needs Elixir 1.18 or later and, for `Storehouse.Live`,
+Storehouse needs Elixir 1.17 or later (with Jason in your deps before
+1.18, which has its own `JSON`) and, for `Storehouse.Live`,
 Phoenix LiveView 1.1 or later. The rest works in any Plug app.
 
 It gives your app:

@@ -54,3 +54,45 @@ jobs:
         env:
           S3_ENDPOINT: http://127.0.0.1:4566
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/storehouse_test
+
+  # The oldest Elixir Storehouse takes (mix.exs), where JSON is Jason's.
+  test-oldest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          otp-version: "27.3"
+          elixir-version: "1.17.3"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: mix-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+
+      - name: moto, on port 4566
+        run: |
+          pipx install "moto[server]"
+          nohup moto_server -p 4566 > /tmp/moto.log 2>&1 &
+          for i in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:4566/ && exit 0; sleep 1; done
+          cat /tmp/moto.log; exit 1
+
+      - run: mix deps.get
+      - run: mix compile --warnings-as-errors
+      - run: mix test
+        env:
+          S3_ENDPOINT: http://127.0.0.1:4566
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/storehouse_test
