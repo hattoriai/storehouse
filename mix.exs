@@ -149,6 +149,9 @@ defmodule Storehouse.MixProject do
           Storehouse.Variants,
           Storehouse.Variants.Plug,
           Storehouse.Variant,
+          Storehouse.Responsive,
+          Storehouse.Components,
+          Storehouse.Analyzer.Warm,
           Storehouse.Renderer,
           Storehouse.Renderer.Vix,
           Storehouse.Renderer.Imgproxy

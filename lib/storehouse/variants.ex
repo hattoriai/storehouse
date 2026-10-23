@@ -312,6 +312,18 @@ defmodule Storehouse.Variants do
   defp exports?(module, function, arity),
     do: Code.ensure_loaded?(module) and function_exported?(module, function, arity)
 
+  @doc false
+  # A preset, normalized: its `:widths`, `:height`, `:aspect`, `:fit` and the
+  # rest, for `Storehouse.Responsive`.
+  def preset_of(name, opts), do: preset!(config(opts), name)
+
+  @doc false
+  # Whether the configured renderer renders in the app.
+  def renders?(opts) do
+    {renderer, _opts} = renderer!(config(opts))
+    exports?(renderer, :render, 4)
+  end
+
   defp preset!(config, name) do
     case Map.fetch(config.presets, name) do
       {:ok, preset} -> preset
