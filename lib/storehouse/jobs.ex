@@ -109,3 +109,29 @@ defmodule Storehouse.Jobs.Purge do
   def perform(%{"urls" => urls, "tags" => tags, "prefixes" => prefixes}),
     do: Storehouse.Purge.run(%{urls: urls, tags: tags, prefixes: prefixes})
 end
+
+defmodule Storehouse.Jobs.Warm do
+  @moduledoc false
+  # A file's sizes made before a visitor asks for them
+  # (`Storehouse.Responsive.warm_later/3`). Its arguments hold the file,
+  # the presets and the options as an Erlang term, which only the app
+  # writes.
+  @behaviour Storehouse.Job
+
+  @doc false
+  def job(file, presets, opts) do
+    term = Base.encode64(:erlang.term_to_binary({file, presets, opts}))
+
+    Storehouse.Job.new(__MODULE__, %{"term" => term},
+      unique: "warm:#{file.key}:#{Enum.join(presets, ",")}",
+      max_attempts: 3
+    )
+  end
+
+  @impl Storehouse.Job
+  def perform(%{"term" => term}) do
+    {file, presets, opts} = term |> Base.decode64!() |> :erlang.binary_to_term([:safe])
+
+    with {:ok, _count} <- Storehouse.Responsive.warm(file, presets, opts), do: :ok
+  end
+end

@@ -126,6 +126,10 @@ It gives your app:
   change for a CDN to keep: made in the app with libvips, once however
   many ask at the same time across a cluster, and deleted with their
   original; or signed URLs of imgproxy, or of a renderer of your own;
+* **responsive images**: a photograph's `src`, `srcset`, size and
+  placeholder as data for a JSON API or an `<img>` for HEEx, never a size
+  larger than the original, and its sizes made before the first visitor
+  asks, on a queue of their own;
 * **a placeholder while a photograph loads**, as you prefer: a tiny WebP
   of it, a few hundred bytes as a data URI that needs no script, a
   ThumbHash or a BlurHash, and its average colour, made with libvips as it

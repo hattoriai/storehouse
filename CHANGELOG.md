@@ -19,7 +19,13 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   `Storehouse.Purge.Cloudflare` is one purger. `Storehouse.Proxy` streams
   a file the app authorises through the app, with ranges, `ETag`,
   `Last-Modified` and `304`s. A store's `head` gives `:modified_at`.
-
+- Responsive images: `Storehouse.Responsive.resolve/3`, a photograph's
+  `src`, `srcset`, `sizes`, size, placeholder, colour and hashes from a
+  preset's ladder (never wider than the original, each width at its
+  step), as JSON or as `Storehouse.Components.img/1`; `urls/3`, `warm/3`
+  and `warm_later/3`, which make its sizes before the first visitor asks
+  (in the app, or over HTTP through imgproxy and a CDN), on the app's
+  runner, off unless configured; and `Storehouse.Analyzer.Warm`.
 - Variants: `Storehouse.variant_url/3` and `Storehouse.variant/3`, by
   presets only (`Storehouse.Variants`: widths or a ladder of them, a box
   to fit or fill, a crop's focus, formats chosen by `Accept`, quality,
