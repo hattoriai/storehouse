@@ -175,7 +175,13 @@ defmodule Storehouse.MixProject do
           Storehouse.Plug.Multipart
         ],
         LiveView: [Storehouse.Live, Storehouse.Live.Writer],
-        Ecto: [Storehouse.Ecto, Storehouse.Ecto.File]
+        Ecto: [Storehouse.Ecto, Storehouse.Ecto.File],
+        "A library of files": [
+          Storehouse.Ecto.Blob,
+          Storehouse.Ecto.Blob.Schema,
+          Storehouse.Ecto.Usage,
+          Storehouse.Ecto.Migrations
+        ]
       ]
     ]
   end

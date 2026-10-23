@@ -71,7 +71,9 @@ It gives your app:
   no table of files; an upload is temporary until its record is saved,
   made permanent then by a copy in the store, and a bucket's lifecycle
   rule deletes those of forms never saved; files replaced or removed are
-  deleted once the database has the change;
+  deleted once the database has the change; or, for files many records
+  use, an optional library of them, the same file one row, each record's
+  files kept as it is saved, and a file in use never deleted;
 * **private files**: signed URLs that expire, from S3 or the local plug,
   `Storehouse.Redirect`, a lasting URL of your app that checks the
   person and redirects to a fresh one, and `Storehouse.Proxy`, which
@@ -287,7 +289,7 @@ another library is welcome as an issue.
 | Work after the upload, analysis | Yes: steps of your own, on a runner you choose (Oban's by default), run again over a table's files | No | No | Yes | Yes, on Oban |
 | Variants | Yes: presets only, made once across a cluster with libvips, or URLs signed for imgproxy behind a CDN, or a renderer of your own | Made at upload | No | Yes | On demand |
 | Placeholders while an image loads | Yes: a step you add, with Vix: a tiny WebP, a ThumbHash or a BlurHash, and the average colour | No | No | Yes | No |
-| A table of files | Not yet ([#16](https://github.com/hattoriai/storehouse/issues/16)) | No | No | Yes | Yes |
+| A table of files | Yes, optional: a library of files many records use, the same file one row, deletion refused while in use | No | No | Yes | Yes |
 | The same file uploaded again is the one kept | Yes: before the upload, and when it is verified | No | No | No | No |
 | Endpoints and a client for frontends without LiveView | Yes: endpoints in batches, and a JavaScript client | No | No | Presign and complete | No |
 | Resumable and multipart uploads from the browser | Multipart straight to the bucket, resumed after a reload; tus not yet ([#12](https://github.com/hattoriai/storehouse/issues/12)) | No | No | No | No |
