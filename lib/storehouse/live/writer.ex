@@ -10,7 +10,8 @@ if Code.ensure_loaded?(Phoenix.LiveView.UploadWriter) do
     It checks the file as it comes: its first bytes, once it has them, are
     of the type the browser claimed, of a type taken (`:accept`) and within
     `:max_pixels`, or the upload stops, and nothing of it stays in the
-    store. Its checksum is computed on the way.
+    store; so it does once it is larger than the owner's `:room`. Its
+    checksum is computed on the way.
 
     It runs in the upload's own process (a LiveView upload channel): a
     file's parts go to the store while the next chunks arrive, and the
@@ -28,7 +29,8 @@ if Code.ensure_loaded?(Phoenix.LiveView.UploadWriter) do
       type = Check.claimed(entry.client_type)
       name = Storehouse.clean_name(entry.client_name)
 
-      with {:ok, key} <- Storehouse.new_key_for(opts, name, type),
+      with :ok <- in_room(entry.client_size, opts[:room]),
+           {:ok, key} <- Storehouse.new_key_for(opts, name, type),
            {:ok, stream} <-
              adapter.stream_open(key, %{name: name, content_type: type, bytes: entry.client_size}) do
         {:ok,
@@ -58,13 +60,18 @@ if Code.ensure_loaded?(Phoenix.LiveView.UploadWriter) do
 
       state = if state.described, do: state, else: %{state | head: state.head <> data}
 
-      with {:ok, state} <- check_head(state, false),
+      with :ok <- in_room(state.bytes, state.opts[:room]),
+           {:ok, state} <- check_head(state, false),
            {:ok, stream} <- state.adapter.stream_write(state.stream, data) do
         {:ok, %{state | stream: stream}}
       else
         {:error, reason} -> {:error, reason, abort(state, reason)}
       end
     end
+
+    # The bytes so far within the owner's room, when it has one.
+    defp in_room(bytes, room) when is_integer(room) and bytes > room, do: {:error, :storage_full}
+    defp in_room(_bytes, _room), do: :ok
 
     @impl true
     def close(%{result: {:error, _refused}} = state, _close), do: {:ok, state}

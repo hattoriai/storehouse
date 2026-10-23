@@ -125,7 +125,7 @@ if Code.ensure_loaded?(Phoenix.LiveView) do
         :stream ->
           writer =
             own
-            |> Keyword.take([:adapter, :key, :owner, :cache, :max_pixels])
+            |> Keyword.take([:adapter, :key, :owner, :room, :cache, :max_pixels])
             |> Keyword.put(:accept, own[:types])
 
           allow_upload(

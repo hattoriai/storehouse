@@ -100,12 +100,16 @@ defmodule StorehouseTest.StreamLive do
   use Phoenix.LiveView
 
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(params, _session, socket) do
+    # ?room=n: the bytes the owner may still store.
+    room = if params["room"], do: String.to_integer(params["room"]), else: :infinity
+
     {:ok,
      socket
      |> assign(results: [])
      |> Storehouse.Live.allow(:photos,
        mode: :stream,
+       room: room,
        types: Storehouse.Check.images() ++ ["application/octet-stream"],
        accept: :any,
        max_file_size: 20_000_000,
