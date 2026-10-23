@@ -21,6 +21,16 @@ export interface QueueOptions {
   checksum?: boolean
   /** Files larger than this are not read for their checksum. Default 512 MiB. */
   checksumMaxBytes?: number
+  /** The app's Storehouse.Plug.Multipart: large files go in parts through it. */
+  multipartUrl?: string
+  /** Files of this size or more go in parts, with multipartUrl. Default 100 MiB. */
+  multipartThreshold?: number
+  /** Parts of one file sent at once. Default 4. */
+  partConcurrency?: number
+  /** Tries again for each part, after a network error or a 5xx. Default 3. */
+  partRetries?: number
+  /** Where an upload in parts is remembered across reloads. Default localStorage; null for nowhere. */
+  storage?: Pick<Storage, "getItem" | "setItem" | "removeItem"> | null
   /** In place of fetch: a JSON POST to the app, giving its answer. */
   fetch?: (url: string, body: unknown) => Promise<any>
   /** In place of XMLHttpRequest: the browser's PUT to the store. */

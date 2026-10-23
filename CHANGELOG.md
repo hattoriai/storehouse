@@ -9,6 +9,18 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Added
 
+- Very large files sent from the browser straight to the bucket in parts:
+  `Storehouse.presign_multipart/4` (checked as `presign_upload/4` is,
+  with parts of a size S3 takes), `presign_parts/4` (each part signed
+  with its SHA-256), `multipart_parts/3` (what the store has, to go on
+  after a reload), `complete_multipart/4` (put together from the store's
+  parts, never the browser's word, a missing part or another size
+  refused, then checked as `verify_upload/2` checks) and
+  `abort_multipart/3`; the adapter callbacks behind them, which
+  `Storehouse.S3` has; `Storehouse.Plug.Multipart`, the same as JSON
+  endpoints; and the JavaScript client sending large files in parts, a
+  few at a time, each tried again, remembered across reloads.
+  `Storehouse.Sweeper` gives up multipart uploads never completed.
 - A CDN in front: `:cache_control` on `Storehouse.S3` (and per call, on
   `store/2` and `presign_upload/4`) keeps a `Cache-Control` with each
   file, however it came in (stored, presigned and signed, streamed,

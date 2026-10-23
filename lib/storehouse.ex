@@ -638,6 +638,236 @@ defmodule Storehouse do
   end
 
   @doc """
+  Starts an upload of a very large file that the browser sends straight to
+  the store in parts, a few at a time, each tried again on its own: a
+  video, an archive to import, past what one `PUT` sends well (and S3's
+  5 GB). Checked as `presign_upload/4` checks one (its type, size, the
+  owner's room, the same file again), and given the parts' size:
+
+      {:ok, %{key: key, upload_id: id, part_bytes: 16_777_216, parts: 128}} =
+        Storehouse.presign_multipart("film.mov", "video/quicktime", 2_147_483_648, owner: owner)
+
+  Then `presign_parts/4` signs the parts, `multipart_parts/3` says which
+  the store has (to go on after a reload), and `complete_multipart/4`
+  puts them together and checks the file as `verify_upload/2` does.
+  `abort_multipart/3` gives it up. `Storehouse.Plug.Multipart` is the
+  same as JSON endpoints, and the JavaScript client sends large files
+  through it.
+
+  ## Options
+
+  Those of `presign_upload/4`, and:
+
+    * `:part_bytes` - the size of each part but the last, at least 5 MiB.
+      The default is 16 MiB, or more for a file of more than 10,000 such
+      parts (S3's most).
+
+  The adapter must take multipart uploads (`c:Storehouse.Adapter.multipart_start/2`):
+  `Storehouse.S3` does; another gives `{:error, :not_supported}`.
+  """
+  @spec presign_multipart(String.t(), String.t() | nil, non_neg_integer(), keyword()) ::
+          {:ok,
+           %{
+             key: String.t(),
+             upload_id: String.t(),
+             part_bytes: pos_integer(),
+             parts: pos_integer()
+           }}
+          | {:existing, Storehouse.File.t()}
+          | {:error, term()}
+  def presign_multipart(name, claim, bytes, opts \\ []) when is_integer(bytes) and bytes >= 0 do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+    type = Check.claimed(claim)
+    name = clean_name(name)
+    meta = %{name: name, content_type: type, bytes: bytes, adapter: adapter}
+
+    span(:presign_multipart, meta, fn ->
+      with :ok <- supported(adapter, :multipart_start, 2),
+           :ok <- accepted(type, Keyword.get(opts, :accept)),
+           {:ok, checksum} <- claimed_checksum(opts[:checksum]),
+           :new <- known(opts, checksum),
+           :ok <- fits(bytes, opts[:room]),
+           :ok <- at_most(bytes, opts[:max_bytes]),
+           {:ok, part_bytes} <- part_bytes(bytes, opts[:part_bytes]),
+           {:ok, key} <- new_key_for(opts, name, type),
+           {:ok, upload_id} <-
+             adapter.multipart_start(
+               key,
+               cache_control(%{name: name, content_type: type, bytes: bytes}, opts)
+             ) do
+        {:ok,
+         %{
+           key: key,
+           upload_id: upload_id,
+           part_bytes: part_bytes,
+           parts: max(ceil_div(bytes, part_bytes), 1)
+         }}
+      end
+    end)
+  end
+
+  @min_part 5 * 1_048_576
+  @max_parts 10_000
+
+  defp at_most(bytes, max) when is_integer(max) and bytes > max, do: {:error, :too_large}
+  defp at_most(_bytes, _max), do: :ok
+
+  # The parts' size: the one asked, at least S3's 5 MiB, and large enough
+  # that the file is no more than 10,000 parts.
+  defp part_bytes(bytes, asked) do
+    size = max(max(asked || 16 * 1_048_576, @min_part), ceil_div(bytes, @max_parts))
+    if bytes > 5 * 1_099_511_627_776, do: {:error, :too_large}, else: {:ok, size}
+  end
+
+  defp ceil_div(a, b), do: div(a + b - 1, b)
+
+  @doc """
+  Signs the browser's `PUT`s of parts of an upload (`presign_multipart/4`):
+  each a part number, or `{number, checksum}` with the part's SHA-256 in
+  Base64, which the store then checks. Gives `{:ok, [%{number: n, method:
+  "PUT", url: …, headers: %{…}}]}`, at most 1,000 at a time; a number
+  outside 1 to 10,000 gives `{:error, :invalid_part}`.
+
+  ## Options
+
+    * `:expires_in` - how long each URL is valid, in seconds. The default
+      is an hour.
+    * `:adapter` - as for `presign_multipart/4`.
+  """
+  @spec presign_parts(
+          String.t(),
+          String.t(),
+          [pos_integer() | {pos_integer(), String.t()}],
+          keyword()
+        ) ::
+          {:ok, [map()]} | {:error, term()}
+  def presign_parts(key, upload_id, parts, opts \\ []) when is_list(parts) do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+
+    with :ok <- supported(adapter, :multipart_sign, 4),
+         true <- valid_key?(key) || {:error, :invalid_key},
+         true <- length(parts) in 1..1_000 || {:error, :invalid_part},
+         {:ok, parts} <- valid_parts(parts) do
+      sign_each(adapter, key, upload_id, parts, Keyword.get(opts, :expires_in, 3_600))
+    end
+  end
+
+  defp sign_each(adapter, key, upload_id, parts, expires_in) do
+    parts
+    |> Enum.reduce_while({:ok, []}, fn {number, checksum}, {:ok, signed} ->
+      case adapter.multipart_sign(key, upload_id, number,
+             checksum: checksum,
+             expires_in: expires_in
+           ) do
+        {:ok, url} -> {:cont, {:ok, [Map.put(url, :number, number) | signed]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> then(fn
+      {:ok, signed} -> {:ok, Enum.reverse(signed)}
+      error -> error
+    end)
+  end
+
+  defp valid_parts(parts) do
+    parts = Enum.map(parts, &valid_part/1)
+    if Enum.all?(parts), do: {:ok, parts}, else: {:error, :invalid_part}
+  end
+
+  # A part number, and its checksum or nil: a SHA-256 in Base64 is 44 long.
+  defp valid_part(n) when is_integer(n), do: valid_part({n, nil})
+  defp valid_part({n, nil}) when is_integer(n) and n in 1..@max_parts, do: {n, nil}
+
+  defp valid_part({n, sum})
+       when is_integer(n) and n in 1..@max_parts and is_binary(sum) and byte_size(sum) == 44,
+       do: {n, sum}
+
+  defp valid_part(_part), do: nil
+
+  @doc """
+  The parts the store has of an upload (`presign_multipart/4`), by number,
+  with their `:bytes` and `:checksum`: what a browser that was reloaded
+  need not send again.
+  """
+  @spec multipart_parts(String.t(), String.t(), keyword()) ::
+          {:ok, [%{number: pos_integer(), bytes: non_neg_integer(), checksum: String.t() | nil}]}
+          | {:error, term()}
+  def multipart_parts(key, upload_id, opts \\ []) do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+
+    with :ok <- supported(adapter, :multipart_parts, 2),
+         true <- valid_key?(key) || {:error, :invalid_key},
+         {:ok, parts} <- adapter.multipart_parts(key, upload_id) do
+      {:ok,
+       parts |> Enum.sort_by(& &1.number) |> Enum.map(&Map.take(&1, [:number, :bytes, :checksum]))}
+    end
+  end
+
+  @doc """
+  Puts an upload's parts together (`presign_multipart/4`), then checks the
+  file as `verify_upload/2` does (its type by its first bytes, its size,
+  the owner's room, the same file again) and gives it: `{:ok, file}`,
+  `{:existing, file}`, or an error, the file deleted.
+
+  The parts are the store's, never the browser's word: every part from 1
+  up, and together exactly `bytes`, or it gives `{:error, {:missing_parts,
+  numbers}}` or `{:error, {:wrong_size, bytes_the_store_has}}`, and the
+  upload stays, for the browser to send what is missing.
+
+  Takes the options of `verify_upload/2`.
+  """
+  @spec complete_multipart(String.t(), String.t(), non_neg_integer(), keyword()) ::
+          {:ok, Storehouse.File.t()} | {:existing, Storehouse.File.t()} | {:error, term()}
+  def complete_multipart(key, upload_id, bytes, opts \\ []) when is_integer(bytes) do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+
+    span(:complete_multipart, %{key: key, adapter: adapter}, fn ->
+      with :ok <- supported(adapter, :multipart_complete, 3),
+           true <- valid_key?(key) || {:error, :invalid_key},
+           {:ok, parts} <- adapter.multipart_parts(key, upload_id),
+           parts = Enum.sort_by(parts, & &1.number),
+           :ok <- whole(parts, bytes),
+           :ok <- adapter.multipart_complete(key, upload_id, parts) do
+        verify_upload(key, opts)
+      end
+    end)
+  end
+
+  # Every part from 1 up to the last one `bytes` takes in parts of the first
+  # one's size, and their sizes `bytes` together.
+  defp whole(parts, bytes) do
+    numbers = Enum.map(parts, & &1.number)
+
+    expected =
+      case parts do
+        [%{number: 1, bytes: size} | _rest] when size > 0 ->
+          Enum.to_list(1..max(ceil_div(bytes, size), 1))
+
+        _other ->
+          Enum.to_list(1..max(Enum.max(numbers, fn -> 1 end), 1))
+      end
+
+    case expected -- numbers do
+      [] ->
+        total = parts |> Enum.map(& &1.bytes) |> Enum.sum()
+        if total == bytes, do: :ok, else: {:error, {:wrong_size, total}}
+
+      missing ->
+        {:error, {:missing_parts, missing}}
+    end
+  end
+
+  @doc "Gives up an upload (`presign_multipart/4`): its parts are deleted from the store."
+  @spec abort_multipart(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def abort_multipart(key, upload_id, opts \\ []) do
+    adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+
+    with :ok <- supported(adapter, :multipart_abort, 2),
+         true <- valid_key?(key) || {:error, :invalid_key},
+         do: adapter.multipart_abort(key, upload_id)
+  end
+
+  @doc """
   Checks a file a browser uploaded straight to the store
   (`presign_upload/4`), by its first bytes, and gives it as `store/2`
   does. A file whose bytes are not of the type it was signed for (a page

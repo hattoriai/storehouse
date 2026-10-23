@@ -132,7 +132,10 @@ your app's origin to `PUT`, with the headers Storehouse signs:
 Uploads presigned with a `:checksum` (see "The same file again" in the
 Stores guide) also send `x-amz-checksum-sha256` and
 `x-amz-sdk-checksum-algorithm`: add them to `AllowedHeaders`. A store with
-a `:cache_control` sends `cache-control` too.
+a `:cache_control` sends `cache-control` too. Parts of a multipart upload
+(`Storehouse.presign_multipart/4`) send `x-amz-checksum-sha256`; the app
+reads their ETags from the bucket, so the browser needs no
+`ExposeHeaders`.
 
 On AWS, in the bucket's permissions; on R2, in the bucket's settings; on
 LocalStack, `awslocal s3api put-bucket-cors`. `Storehouse.Local` needs
@@ -140,6 +143,18 @@ none: the plug is your app.
 
 If your app sends a `Content-Security-Policy`, allow the store's origin
 in `connect-src`.
+
+## Very large files, in parts
+
+`Storehouse.presign_multipart/4` starts an upload that the browser sends
+straight to the bucket in parts, for files past what one `PUT` sends
+well: checked before a byte is sent as `presign_upload/4` checks one,
+each part signed with its checksum (`presign_parts/4`), what the store
+has listed for a browser that comes back (`multipart_parts/3`), then put
+together and checked as `verify_upload/2` checks one
+(`complete_multipart/4`). `Storehouse.Plug.Multipart` is the same as
+JSON endpoints, and the JavaScript client sends large files through it:
+see "Very large files, in parts" in [Uploads from any client](any_client.md).
 
 ## Without LiveView
 

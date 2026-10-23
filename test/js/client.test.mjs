@@ -160,3 +160,122 @@ test("progress is reported, and 1 only once the store has the file", async () =>
 test("checksum is the file's SHA-256, in hex", async () => {
   assert.equal(await checksum(file("e", "")), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
 });
+
+// An app of Storehouse.Plug.Multipart, and a store whose parts it keeps;
+// a storage that outlives the queue, as localStorage outlives a reload.
+function multipartWorld({ partFails = {}, existing = false } = {}) {
+  const calls = { start: 0, sign: [], list: 0, complete: [], abort: 0 };
+  const stored = new Map();
+  const failures = { ...partFails };
+
+  const fetch = async (url, body) => {
+    const action = url.split("/").pop();
+    if (action === "start") {
+      calls.start++;
+      if (existing) return { existing: { key: "kept" } };
+      return { upload: { key: `k/${body.name}`, upload_id: "u1", part_bytes: 4, parts: Math.ceil(body.bytes / 4) } };
+    }
+    if (action === "list") {
+      calls.list++;
+      return { parts: [...stored.entries()].map(([number, bytes]) => ({ number, bytes, checksum: null })) };
+    }
+    if (action === "sign") {
+      calls.sign.push(body.parts[0]);
+      return { parts: body.parts.map((p) => ({ number: p.number, method: "PUT", url: `https://store/part/${p.number}`, headers: {} })) };
+    }
+    if (action === "complete") {
+      calls.complete.push(body);
+      return { file: { key: body.key, bytes: body.bytes } };
+    }
+    if (action === "abort") {
+      calls.abort++;
+      return { ok: true };
+    }
+  };
+
+  const put = async (signed, blob, onProgress) => {
+    const n = Number(signed.url.split("/").pop());
+    if (failures[n]-- > 0) throw Object.assign(new Error("network"), { status: failures.status ?? 0 });
+    onProgress(1);
+    stored.set(n, blob.size);
+  };
+
+  return { calls, stored, fetch, put };
+}
+
+function memoryStorage() {
+  const items = new Map();
+  return { items, getItem: (k) => items.get(k) ?? null, setItem: (k, v) => items.set(k, v), removeItem: (k) => items.delete(k) };
+}
+
+const multipartQueue = (w, storage, opts = {}) =>
+  createUploadQueue({
+    presignUrl: "/presign",
+    registerUrl: "/register",
+    multipartUrl: "/multipart/",
+    multipartThreshold: 8,
+    fetch: w.fetch,
+    put: w.put,
+    storage,
+    ...opts,
+  });
+
+test("a large file in parts, each with its checksum, then completed", async () => {
+  const w = multipartWorld();
+  const storage = memoryStorage();
+  const upload = multipartQueue(w, storage).add(file("film.mov", "0123456789", "video/quicktime"));
+
+  assert.deepEqual(await upload.result, { status: "registered", value: { file: { key: "k/film.mov", bytes: 10 } } });
+  assert.equal(w.calls.start, 1);
+  assert.deepEqual([...w.stored.entries()].sort(), [[1, 4], [2, 4], [3, 2]]);
+  assert.deepEqual(w.calls.sign.map((p) => p.number).sort(), [1, 2, 3]);
+  for (const part of w.calls.sign) assert.match(part.checksum, /^[A-Za-z0-9+/]{43}=$/);
+  assert.deepEqual(w.calls.complete, [{ key: "k/film.mov", upload_id: "u1", bytes: 10, name: "film.mov" }]);
+  assert.equal(storage.items.size, 0);
+  assert.equal(upload.fraction, 1);
+});
+
+test("a part that fails is tried again on its own", async () => {
+  const w = multipartWorld({ partFails: { 2: 2 } });
+  const upload = multipartQueue(w, memoryStorage()).add(file("film.mov", "0123456789", "video/quicktime"));
+
+  assert.equal((await upload.result).status, "registered");
+  assert.equal(w.calls.sign.filter((p) => p.number === 2).length, 3);
+  assert.equal(w.calls.sign.filter((p) => p.number === 1).length, 1);
+});
+
+test("after a reload, the same file goes on from the parts the store has", async () => {
+  const w = multipartWorld({ partFails: { 3: 99, status: 400 } });
+  const storage = memoryStorage();
+  const bytes = "0123456789";
+
+  // The first page: parts 1 and 2 sent, part 3 refused, the upload remembered.
+  // The same file from the disk twice: the same name, size and time.
+  const film = () => new File([bytes], "film.mov", { type: "video/quicktime", lastModified: 1_790_000_000_000 });
+  const first = multipartQueue(w, storage).add(film());
+  assert.equal((await first.result).status, "error");
+  assert.equal(storage.items.size, 1);
+
+  // Reloaded: added again, only part 3 is sent.
+  const again = multipartWorld();
+  again.stored.set(1, 4).set(2, 4);
+  const second = multipartQueue(again, storage).add(film());
+
+  assert.equal((await second.result).status, "registered");
+  assert.equal(again.calls.start, 0);
+  assert.equal(again.calls.list, 1);
+  assert.deepEqual(again.calls.sign.map((p) => p.number), [3]);
+  assert.equal(storage.items.size, 0);
+});
+
+test("a large file the app has is not sent; a small one goes whole", async () => {
+  const w = multipartWorld({ existing: true });
+  const upload = multipartQueue(w, memoryStorage()).add(file("film.mov", "0123456789", "video/quicktime"));
+  assert.deepEqual(await upload.result, { status: "existing", value: { key: "kept" } });
+  assert.equal(w.calls.sign.length, 0);
+
+  const small = world();
+  const queue = multipartQueue({ ...small, fetch: small.fetch, put: small.put }, memoryStorage(), { registerMaxWaitMs: 5 });
+  assert.equal((await queue.add(file("a.jpg", "abc")).result).status, "registered");
+  assert.equal(small.calls.presign.length, 1);
+});

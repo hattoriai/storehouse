@@ -6,7 +6,10 @@ defmodule Storehouse.Sweeper do
     * the temporary files of forms never saved: those under the temporary
       prefix (`Storehouse.cache_prefix/0`) older than `:max_age`;
     * the files that expired (`Storehouse.expiring_key/2`), once their
-      time has come.
+      time has come;
+    * the multipart uploads started more than `:max_age` ago and never
+      completed (`Storehouse.presign_multipart/4`), whose parts the store
+      keeps (and bills) until they are given up.
 
   On several nodes, each sweep runs on one of them at a time.
 
@@ -27,6 +30,8 @@ defmodule Storehouse.Sweeper do
     * `:prefix` - the default is `Storehouse.cache_prefix/0`.
     * `:expiring` - whether expired files are swept. The default is
       `true`.
+    * `:multipart` - whether abandoned multipart uploads are given up,
+      where the store lists them. The default is `true`.
     * `:adapter` - the store. The default is `Storehouse.adapter/0`.
   """
 
@@ -42,7 +47,14 @@ defmodule Storehouse.Sweeper do
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     opts =
-      Keyword.validate!(opts, [:prefix, :adapter, max_age: 86_400, every: 3_600, expiring: true])
+      Keyword.validate!(opts, [
+        :prefix,
+        :adapter,
+        max_age: 86_400,
+        every: 3_600,
+        expiring: true,
+        multipart: true
+      ])
 
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
@@ -53,8 +65,8 @@ defmodule Storehouse.Sweeper do
   `{:ok, count}`.
 
   Takes `:max_age` (the default is a day), `:prefix` (the default is
-  `Storehouse.cache_prefix/0`), `:expiring` (the default is `true`) and
-  `:adapter`.
+  `Storehouse.cache_prefix/0`), `:expiring` and `:multipart` (the defaults
+  are `true`) and `:adapter`. The count is of files and uploads.
   """
   @spec sweep(keyword()) :: {:ok, non_neg_integer()} | {:error, term()}
   def sweep(opts \\ []) do
@@ -66,8 +78,24 @@ defmodule Storehouse.Sweeper do
     with {:ok, cached} <-
            swept(adapter, prefix, &(DateTime.compare(&1.modified_at, before) == :lt)),
          {:ok, expired} <- expired(adapter, now, Keyword.get(opts, :expiring, true)),
-         do: {:ok, cached + expired}
+         {:ok, abandoned} <- abandoned(adapter, before, Keyword.get(opts, :multipart, true)),
+         do: {:ok, cached + expired + abandoned}
   end
+
+  # Multipart uploads started before `before`, given up.
+  defp abandoned(adapter, before, true) do
+    if Storehouse.supports?(adapter, :multipart_uploads, 1) do
+      with {:ok, uploads} <- adapter.multipart_uploads("") do
+        old = Enum.filter(uploads, &(DateTime.compare(&1.started_at, before) == :lt))
+        Enum.each(old, &adapter.multipart_abort(&1.key, &1.upload_id))
+        {:ok, length(old)}
+      end
+    else
+      {:ok, 0}
+    end
+  end
+
+  defp abandoned(_adapter, _before, false), do: {:ok, 0}
 
   defp expired(_adapter, _now, false), do: {:ok, 0}
 

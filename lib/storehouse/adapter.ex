@@ -205,7 +205,54 @@ defmodule Storehouse.Adapter do
   """
   @callback uploaded(key()) :: :ok
 
+  @typedoc "A part of a multipart upload, as the store has it."
+  @type part :: %{
+          number: pos_integer(),
+          etag: String.t(),
+          bytes: non_neg_integer(),
+          checksum: String.t() | nil
+        }
+
+  @doc """
+  Starts a multipart upload of a file under `key`, of `meta`'s type, that
+  the browser sends in parts straight to the store
+  (`Storehouse.presign_multipart/4`): `{:ok, upload_id}`. Optional, with
+  the other `multipart_` callbacks: `Storehouse.S3` has them.
+  """
+  @callback multipart_start(key(), meta()) :: {:ok, String.t()} | {:error, term()}
+
+  @doc """
+  Signs the browser's `PUT` of part `number`, with its SHA-256 in Base64
+  (`:checksum`) when it is given, so that the store refuses other bytes:
+  `{:ok, %{method: "PUT", url: …, headers: %{…}}}`.
+  """
+  @callback multipart_sign(key(), String.t(), pos_integer(), keyword()) ::
+              {:ok, %{method: String.t(), url: String.t(), headers: map()}} | {:error, term()}
+
+  @doc "The parts the store has of an upload: `{:ok, parts}`, by number."
+  @callback multipart_parts(key(), String.t()) :: {:ok, [part()]} | {:error, term()}
+
+  @doc "Puts the parts together: the file is then under its key."
+  @callback multipart_complete(key(), String.t(), [part()]) :: :ok | {:error, term()}
+
+  @doc "Gives up an upload: its parts are deleted."
+  @callback multipart_abort(key(), String.t()) :: :ok | {:error, term()}
+
+  @doc """
+  The uploads under `prefix` started and neither completed nor given up,
+  with their `:key`, `:upload_id` and `:started_at`: for the sweeper.
+  """
+  @callback multipart_uploads(prefix :: String.t()) ::
+              {:ok, [%{key: key(), upload_id: String.t(), started_at: DateTime.t()}]}
+              | {:error, term()}
+
   @optional_callbacks uploaded: 1,
+                      multipart_start: 2,
+                      multipart_sign: 4,
+                      multipart_parts: 2,
+                      multipart_complete: 3,
+                      multipart_abort: 2,
+                      multipart_uploads: 1,
                       presign_upload: 3,
                       signed_url: 2,
                       read_head: 2,
