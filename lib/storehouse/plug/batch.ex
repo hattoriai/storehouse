@@ -5,6 +5,8 @@ defmodule Storehouse.Plug.Batch do
 
   import Plug.Conn
 
+  alias Plug.Conn.Utils
+
   @functions [:owner, :room, :existing]
 
   # Options already made (a server that calls init/1 again) are kept as
@@ -31,9 +33,23 @@ defmodule Storehouse.Plug.Batch do
       end
 
     opts[:batch]
+    |> Keyword.put_new_lazy(:secret, fn -> conn.secret_key_base end)
     |> put_present(:owner, owner)
     |> put_present(:room, room)
     |> put_present(:existing, existing)
+  end
+
+  # The secret tokens are signed with: the endpoint's, or the option's.
+  def secret!(opts) do
+    case opts[:secret] do
+      secret when is_binary(secret) and byte_size(secret) >= 32 ->
+        secret
+
+      _other ->
+        raise ArgumentError,
+              "Storehouse's upload plugs need a secret of at least 32 bytes: " <>
+                "the endpoint's secret_key_base, or :secret"
+    end
   end
 
   defp call(nil, _args), do: nil
@@ -43,8 +59,30 @@ defmodule Storehouse.Plug.Batch do
   defp put_present(opts, _key, nil), do: opts
   defp put_present(opts, key, value), do: Keyword.put(opts, key, value)
 
+  # JSON only: a form of another site (text/plain, urlencoded, multipart)
+  # is sent with the person's cookie and no preflight, and is never read.
+  def json_request?(conn) do
+    case get_req_header(conn, "content-type") do
+      [type | _] ->
+        case Utils.media_type(type) do
+          {:ok, "application", subtype, _params} ->
+            subtype == "json" or String.ends_with?(subtype, "+json")
+
+          _other ->
+            false
+        end
+
+      [] ->
+        false
+    end
+  end
+
   # The request's "uploads": parsed by Plug.Parsers, or read here.
   def items(conn) do
+    if json_request?(conn), do: json_items(conn), else: {:unsupported, conn}
+  end
+
+  defp json_items(conn) do
     case conn.body_params do
       %{"uploads" => items} when is_list(items) ->
         {:ok, conn, items}
@@ -80,7 +118,8 @@ defmodule Storehouse.Plug.Batch do
         "key" => upload.key,
         "method" => upload.method,
         "url" => upload.url,
-        "headers" => upload.headers
+        "headers" => upload.headers,
+        "token" => upload.token
       }
     }
 

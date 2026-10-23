@@ -708,6 +708,8 @@ defmodule Storehouse do
 
   @min_part 5 * 1_048_576
   @max_parts 10_000
+  # S3's largest object.
+  @max_upload 5 * 1_099_511_627_776
 
   defp at_most(bytes, max) when is_integer(max) and bytes > max, do: {:error, :too_large}
   defp at_most(_bytes, _max), do: :ok
@@ -716,7 +718,7 @@ defmodule Storehouse do
   # that the file is no more than 10,000 parts.
   defp part_bytes(bytes, asked) do
     size = max(max(asked || 16 * 1_048_576, @min_part), ceil_div(bytes, @max_parts))
-    if bytes > 5 * 1_099_511_627_776, do: {:error, :too_large}, else: {:ok, size}
+    if bytes > @max_upload, do: {:error, :too_large}, else: {:ok, size}
   end
 
   defp ceil_div(a, b), do: div(a + b - 1, b)
@@ -730,6 +732,11 @@ defmodule Storehouse do
 
   ## Options
 
+    * `:bytes` and `:part_bytes` - the upload's size and its parts' (as
+      `presign_multipart/4` gave them): each URL then takes a part of its
+      size only, and a number past the upload's last part gives
+      `{:error, :invalid_part}`. `Storehouse.Plug.Multipart` gives them
+      from the upload's token.
     * `:expires_in` - how long each URL is valid, in seconds. The default
       is an hour.
     * `:adapter` - as for `presign_multipart/4`.
@@ -747,16 +754,36 @@ defmodule Storehouse do
     with :ok <- supported(adapter, :multipart_sign, 4),
          true <- valid_key?(key) || {:error, :invalid_key},
          true <- length(parts) in 1..1_000 || {:error, :invalid_part},
-         {:ok, parts} <- valid_parts(parts) do
-      sign_each(adapter, key, upload_id, parts, Keyword.get(opts, :expires_in, 3_600))
+         {:ok, parts} <- valid_parts(parts),
+         {:ok, sizes} <- part_sizes(parts, opts[:bytes], opts[:part_bytes]) do
+      sign_each(adapter, key, upload_id, sizes, Keyword.get(opts, :expires_in, 3_600))
     end
   end
 
+  # Each part with its size, when the upload's is known: every part but the
+  # last is part_bytes, and there is none past the last.
+  defp part_sizes(parts, bytes, part_bytes)
+       when is_integer(bytes) and bytes >= 0 and is_integer(part_bytes) and part_bytes > 0 do
+    last = max(ceil_div(bytes, part_bytes), 1)
+
+    if Enum.all?(parts, fn {n, _sum} -> n <= last end),
+      do:
+        {:ok, Enum.map(parts, fn {n, sum} -> {n, sum, part_size(n, last, bytes, part_bytes)} end)},
+      else: {:error, :invalid_part}
+  end
+
+  defp part_sizes(parts, nil, nil), do: {:ok, Enum.map(parts, fn {n, sum} -> {n, sum, nil} end)}
+  defp part_sizes(_parts, _bytes, _part_bytes), do: {:error, :invalid_part}
+
+  defp part_size(last, last, bytes, part_bytes), do: bytes - (last - 1) * part_bytes
+  defp part_size(_n, _last, _bytes, part_bytes), do: part_bytes
+
   defp sign_each(adapter, key, upload_id, parts, expires_in) do
     parts
-    |> Enum.reduce_while({:ok, []}, fn {number, checksum}, {:ok, signed} ->
+    |> Enum.reduce_while({:ok, []}, fn {number, checksum, bytes}, {:ok, signed} ->
       case adapter.multipart_sign(key, upload_id, number,
              checksum: checksum,
+             bytes: bytes,
              expires_in: expires_in
            ) do
         {:ok, url} -> {:cont, {:ok, [Map.put(url, :number, number) | signed]}}
@@ -812,7 +839,9 @@ defmodule Storehouse do
   The parts are the store's, never the browser's word: every part from 1
   up, and together exactly `bytes`, or it gives `{:error, {:missing_parts,
   numbers}}` or `{:error, {:wrong_size, bytes_the_store_has}}`, and the
-  upload stays, for the browser to send what is missing.
+  upload stays, for the browser to send what is missing. `bytes` past
+  `:max_bytes`, or more than S3 takes, gives `{:error, :too_large}` before
+  the store is asked.
 
   Takes the options of `verify_upload/2`.
   """
@@ -824,6 +853,9 @@ defmodule Storehouse do
     span(:complete_multipart, %{key: key, adapter: adapter}, fn ->
       with :ok <- supported(adapter, :multipart_complete, 3),
            true <- valid_key?(key) || {:error, :invalid_key},
+           true <- bytes >= 0 || {:error, :invalid_part},
+           :ok <- at_most(bytes, opts[:max_bytes]),
+           :ok <- at_most(bytes, @max_upload),
            {:ok, parts} <- adapter.multipart_parts(key, upload_id),
            parts = Enum.sort_by(parts, & &1.number),
            :ok <- whole(parts, bytes),
@@ -834,26 +866,30 @@ defmodule Storehouse do
   end
 
   # Every part from 1 up to the last one `bytes` takes in parts of the first
-  # one's size, and their sizes `bytes` together.
+  # one's size, and their sizes `bytes` together. The store has at most
+  # 10,000 parts, so no more are counted.
   defp whole(parts, bytes) do
-    numbers = Enum.map(parts, & &1.number)
+    numbers = MapSet.new(parts, & &1.number)
+    total = parts |> Enum.map(& &1.bytes) |> Enum.sum()
 
-    expected =
+    last =
       case parts do
-        [%{number: 1, bytes: size} | _rest] when size > 0 ->
-          Enum.to_list(1..max(ceil_div(bytes, size), 1))
-
-        _other ->
-          Enum.to_list(1..max(Enum.max(numbers, fn -> 1 end), 1))
+        [%{number: 1, bytes: size} | _rest] when size > 0 -> max(ceil_div(bytes, size), 1)
+        _other -> max(Enum.max(numbers, fn -> 1 end), 1)
       end
 
-    case expected -- numbers do
-      [] ->
-        total = parts |> Enum.map(& &1.bytes) |> Enum.sum()
-        if total == bytes, do: :ok, else: {:error, {:wrong_size, total}}
+    cond do
+      last > @max_parts ->
+        {:error, {:wrong_size, total}}
 
-      missing ->
+      (missing = Enum.reject(1..last, &MapSet.member?(numbers, &1))) != [] ->
         {:error, {:missing_parts, missing}}
+
+      total == bytes ->
+        :ok
+
+      true ->
+        {:error, {:wrong_size, total}}
     end
   end
 

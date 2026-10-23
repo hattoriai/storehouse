@@ -16,8 +16,16 @@ and the last, in JSON, a batch at a time (up to 100 files).
 
 ```elixir
 # lib/my_app_web/router.ex
+pipeline :files do
+  plug :accepts, ["json"]
+  plug :fetch_session
+  # The browser's session is its cookie: the CSRF token, which the
+  # JavaScript client sends from the page, says the request is the page's.
+  plug :protect_from_forgery
+end
+
 scope "/files" do
-  pipe_through [:api, :require_user]
+  pipe_through [:files, :require_user]
 
   forward "/presign", Storehouse.Plug.Presign,
     owner: &MyAppWeb.Files.owner/1,
@@ -54,6 +62,10 @@ defmodule MyAppWeb.Files do
 end
 ```
 
+A frontend that signs in with a token of its own (an `authorization`
+header, a native app) has no cookie for another site to send, and no
+CSRF token to check: its pipeline is `:api` and its authentication.
+
 Each option that depends on the request is a function of the conn: whose
 files these are (`:owner`), the bytes they may still store (`:room`,
 shared by the batch: each file takes its size from what the next sees),
@@ -76,7 +88,8 @@ answers `200`, one result per upload, in order:
 ```json
 {"uploads": [
   {"upload": {"key": "accounts/42/2026/10/0b6…-harbour.jpg", "method": "PUT",
-              "url": "https://bucket…", "headers": {"content-type": "image/jpeg", "content-disposition": "inline"}}},
+              "url": "https://bucket…", "headers": {"content-type": "image/jpeg", "content-disposition": "inline"},
+              "token": "SFMyNTY…"}},
   {"error": "not_accepted"}
 ]}
 ```
@@ -84,24 +97,34 @@ answers `200`, one result per upload, in order:
 or `{"existing": {…file…}}` for a file the app has, which is not
 uploaded. The browser sends each file with exactly the `method` and
 `headers` given (with a checksum, those include `x-amz-checksum-sha256`:
-the store takes only those bytes).
+the store takes only those bytes), then gives the `key` and the `token`
+back to register it.
 
 `POST /files/register`:
 
 ```json
-{"uploads": [{"key": "accounts/42/2026/10/0b6…-harbour.jpg", "name": "harbour.jpg"}]}
+{"uploads": [{"key": "accounts/42/2026/10/0b6…-harbour.jpg", "token": "SFMyNTY…", "name": "harbour.jpg"}]}
 ```
 
 answers `200` with `{"uploads": [...]}`, the values your `:then` gives (or,
 without it, `{"file": {…}}`, `{"existing": {…}}` or `{"error": code}`).
 The same bytes twice in one batch are one file: the second's copy is
-deleted. A key of another owner's file is refused with `not_owner`, and
-that file left as it is.
+deleted.
+
+The token is the upload's key and owner, signed with your endpoint's
+`secret_key_base` when it was presigned, and valid for a day. A key
+without its token, or with another's, is refused with `invalid_token`,
+and the file at it is left as it is: a request can name only an upload
+your app signed for that owner, never a file already stored, or one of
+another person of a workspace they share.
+
+Both endpoints take `application/json` only (anything else is a `415`),
+so that a page of another site cannot send them a form.
 
 Errors are codes, for the frontend to say in its own words:
 `not_accepted`, `too_large`, `storage_full`, `invalid_checksum`,
-`not_owner`, `invalid_item`, `too_many` (a `413` for the whole batch), and
-`upload_failed`. A body that is not a batch is a `400`.
+`not_owner`, `invalid_token`, `invalid_item`, `too_many` (a `413` for the
+whole batch), and `upload_failed`. A body that is not a batch is a `400`.
 
 ## The JavaScript client
 
@@ -254,6 +277,7 @@ uppy.use(AwsS3, {
     const {uploads: [result]} = await response.json()
     if (result.error) throw new Error(result.error)
     file.meta.key = result.upload.key
+    file.meta.token = result.upload.token
     return result.upload
   }
 })
@@ -262,7 +286,7 @@ uppy.on("complete", ({successful}) =>
   fetch("/files/register", {
     method: "POST",
     headers: {"content-type": "application/json", "x-csrf-token": csrfToken},
-    body: JSON.stringify({uploads: successful.map(f => ({key: f.meta.key, name: f.name}))})
+    body: JSON.stringify({uploads: successful.map(f => ({key: f.meta.key, token: f.meta.token, name: f.name}))})
   })
 )
 ```

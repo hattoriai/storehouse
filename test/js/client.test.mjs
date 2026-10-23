@@ -18,7 +18,7 @@ function world({ putFails = 0, existingSum = null, register } = {}) {
         uploads: body.uploads.map((item) => {
           if (item.name.startsWith("refused")) return { error: "not_accepted" };
           if (existingSum && item.checksum === existingSum) return { existing: { key: "kept" } };
-          return { upload: { key: `k/${item.name}`, method: "PUT", url: `https://store/${item.name}`, headers: { "content-type": item.type } } };
+          return { upload: { key: `k/${item.name}`, token: `t/${item.name}`, method: "PUT", url: `https://store/${item.name}`, headers: { "content-type": item.type } } };
         }),
       };
     }
@@ -57,7 +57,8 @@ test("presigns the files added together, sends them, and registers them in a bat
   assert.deepEqual([...w.calls.presign[0]].sort(byName).map((i) => [i.name, i.type, i.bytes]), [["a.jpg", "image/jpeg", 3], ["b.jpg", "image/jpeg", 4]]);
   assert.match(w.calls.presign[0][0].checksum, /^[0-9a-f]{64}$/);
   assert.equal(w.calls.register.length, 1);
-  assert.deepEqual([...w.calls.register[0]].sort(byName), [{ key: "k/a.jpg", name: "a.jpg" }, { key: "k/b.jpg", name: "b.jpg" }]);
+  // Each with the token its presign gave.
+  assert.deepEqual([...w.calls.register[0]].sort(byName), [{ key: "k/a.jpg", token: "t/a.jpg", name: "a.jpg" }, { key: "k/b.jpg", token: "t/b.jpg", name: "b.jpg" }]);
   assert.equal(uploads[0].fraction, 1);
 });
 
@@ -173,8 +174,10 @@ function multipartWorld({ partFails = {}, existing = false } = {}) {
     if (action === "start") {
       calls.start++;
       if (existing) return { existing: { key: "kept" } };
-      return { upload: { key: `k/${body.name}`, upload_id: "u1", part_bytes: 4, parts: Math.ceil(body.bytes / 4) } };
+      return { upload: { key: `k/${body.name}`, upload_id: "u1", token: "t1", part_bytes: 4, parts: Math.ceil(body.bytes / 4) } };
     }
+    // Every request about the upload names it with its token.
+    if (body.token !== "t1") throw Object.assign(new Error("invalid_token"), { code: "invalid_token" });
     if (action === "list") {
       calls.list++;
       return { parts: [...stored.entries()].map(([number, bytes]) => ({ number, bytes, checksum: null })) };
@@ -185,7 +188,7 @@ function multipartWorld({ partFails = {}, existing = false } = {}) {
     }
     if (action === "complete") {
       calls.complete.push(body);
-      return { file: { key: body.key, bytes: body.bytes } };
+      return { file: { key: body.key, bytes: [...stored.values()].reduce((a, b) => a + b, 0) } };
     }
     if (action === "abort") {
       calls.abort++;
@@ -230,7 +233,8 @@ test("a large file in parts, each with its checksum, then completed", async () =
   assert.deepEqual([...w.stored.entries()].sort(), [[1, 4], [2, 4], [3, 2]]);
   assert.deepEqual(w.calls.sign.map((p) => p.number).sort(), [1, 2, 3]);
   for (const part of w.calls.sign) assert.match(part.checksum, /^[A-Za-z0-9+/]{43}=$/);
-  assert.deepEqual(w.calls.complete, [{ key: "k/film.mov", upload_id: "u1", bytes: 10, name: "film.mov" }]);
+  // The size is the one the app signed at start: the browser does not say it again.
+  assert.deepEqual(w.calls.complete, [{ key: "k/film.mov", upload_id: "u1", token: "t1", name: "film.mov" }]);
   assert.equal(storage.items.size, 0);
   assert.equal(upload.fraction, 1);
 });

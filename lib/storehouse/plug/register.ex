@@ -58,6 +58,7 @@ defmodule Storehouse.Plug.Register do
       Batch.json(conn, 200, %{"uploads" => values})
     else
       {:error, :too_many} -> Batch.error(conn, 413, :too_many)
+      {:unsupported, conn} -> Batch.error(conn, 415, :unsupported_media_type)
       {:error, conn} -> Batch.error(conn, 400, :invalid_request)
     end
   end

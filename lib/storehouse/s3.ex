@@ -543,9 +543,13 @@ defmodule Storehouse.S3 do
       headers =
         if checksum = opts[:checksum], do: %{"x-amz-checksum-sha256" => checksum}, else: %{}
 
+      # With its size, the bucket takes a part of that size only.
+      length =
+        if bytes = opts[:bytes], do: [{"content-length", Integer.to_string(bytes)}], else: []
+
       signed =
         Signature.presign("PUT", uri, Keyword.get(opts, :expires_in, 3_600), credentials(c),
-          headers: Map.to_list(headers)
+          headers: Map.to_list(headers) ++ length
         )
 
       {:ok, %{method: "PUT", url: URI.to_string(signed), headers: headers}}

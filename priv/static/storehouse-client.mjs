@@ -309,7 +309,7 @@ export function createUploadQueue(options) {
 
     let results;
     try {
-      const items = batch.map((u) => ({ key: u.key, name: u.file.name || "file" }));
+      const items = batch.map((u) => ({ key: u.key, token: u.signed.token, name: u.file.name || "file" }));
       results = (await fetchJson(opts.registerUrl, { uploads: items })).uploads;
     } catch (error) {
       for (const upload of batch) finish(upload, { status: "error", error: error.code || "upload_failed" });
@@ -341,7 +341,7 @@ export function createUploadQueue(options) {
 
       if (started) {
         try {
-          have = (await fetchJson(url("list"), { key: started.key, upload_id: started.upload_id })).parts;
+          have = (await fetchJson(url("list"), named(started))).parts;
         } catch {
           started = null;
         }
@@ -360,7 +360,7 @@ export function createUploadQueue(options) {
 
       upload.key = started.key;
       upload.uploadId = started.upload_id;
-      upload.abortParts = () => fetchJson(url("abort"), { key: started.key, upload_id: started.upload_id }).catch(() => {});
+      upload.abortParts = () => fetchJson(url("abort"), named(started)).catch(() => {});
 
       const size = started.part_bytes;
       const count = Math.max(Math.ceil(file.size / size), 1);
@@ -378,7 +378,7 @@ export function createUploadQueue(options) {
         for (let attempt = 0; ; attempt++) {
           if (upload.done) return;
           try {
-            const [signed] = (await fetchJson(url("sign"), { key: started.key, upload_id: started.upload_id, parts: [sum ? { number: n, checksum: sum } : { number: n }] })).parts;
+            const [signed] = (await fetchJson(url("sign"), { ...named(started), parts: [sum ? { number: n, checksum: sum } : { number: n }] })).parts;
             await put(signed, part, (fraction) => {
               sent.set(n, part.size * fraction);
               progress();
@@ -401,7 +401,7 @@ export function createUploadQueue(options) {
       await Promise.all(workers);
       if (upload.done) return;
 
-      const answer = await fetchJson(url("complete"), { key: started.key, upload_id: started.upload_id, bytes: file.size, name: file.name || "file" });
+      const answer = await fetchJson(url("complete"), { ...named(started), name: file.name || "file" });
       forget(storage, remembered);
       upload.setProgress(1);
       if (answer.existing) finish(upload, { status: "existing", value: answer.existing });
@@ -431,6 +431,10 @@ async function partChecksum(blob) {
   return btoa(String.fromCharCode(...digest));
 }
 
+// An upload in parts as each request names it: with the token the app
+// signed when it started, which it asks for again each time.
+const named = ({ key, upload_id, token }) => ({ key, upload_id, token });
+
 // Uploads remembered across reloads, where the browser keeps them.
 function recall(storage, name) {
   try {
@@ -443,7 +447,7 @@ function recall(storage, name) {
 
 function remember(storage, name, started) {
   try {
-    storage?.setItem(name, JSON.stringify({ key: started.key, upload_id: started.upload_id, part_bytes: started.part_bytes }));
+    storage?.setItem(name, JSON.stringify({ ...named(started), part_bytes: started.part_bytes }));
   } catch {}
 }
 

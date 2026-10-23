@@ -201,6 +201,7 @@ defmodule Storehouse.MultipartS3Test do
 
       conn =
         conn(:post, "/#{action}", Storehouse.JSON.encode!(body))
+        |> Map.put(:secret_key_base, String.duplicate("s", 64))
         |> Plug.Conn.put_req_header("content-type", "application/json")
         |> MultipartPlug.call(opts)
 
@@ -217,53 +218,80 @@ defmodule Storehouse.MultipartS3Test do
                  "bytes" => byte_size(data)
                })
 
-      %{"key" => key, "upload_id" => id, "part_bytes" => size} = upload
+      %{"key" => key, "upload_id" => id, "part_bytes" => size, "token" => token} = upload
       [{1, first}] = chunks(data, size)
+      named = %{"key" => key, "upload_id" => id, "token" => token}
 
       assert {200, %{"parts" => [signed]}} =
-               call("sign", %{
-                 "key" => key,
-                 "upload_id" => id,
-                 "parts" => [%{"number" => 1, "checksum" => sha(first)}]
-               })
+               call("sign", Map.put(named, "parts", [%{"number" => 1, "checksum" => sha(first)}]))
+
+      # Its size is signed: the bucket takes no larger part.
+      query = URI.decode_query(URI.parse(signed["url"]).query)
+      assert "content-length" in String.split(query["X-Amz-SignedHeaders"], ";")
+
+      # No part past the last one the upload has.
+      assert {400, %{"error" => "invalid_part"}} =
+               call("sign", Map.put(named, "parts", [%{"number" => 2}]))
 
       assert put(%{url: signed["url"], headers: signed["headers"]}, first) == 200
 
-      assert {200, %{"parts" => [%{"number" => 1, "bytes" => bytes}]}} =
-               call("list", %{"key" => key, "upload_id" => id})
-
+      assert {200, %{"parts" => [%{"number" => 1, "bytes" => bytes}]}} = call("list", named)
       assert bytes == byte_size(data)
 
+      # The size is the one start signed, whatever the browser says.
       assert {200, %{"file" => %{"key" => ^key, "bytes" => ^bytes}}} =
-               call("complete", %{
-                 "key" => key,
-                 "upload_id" => id,
-                 "bytes" => bytes,
-                 "name" => "a.zip"
-               })
+               call("complete", Map.merge(named, %{"bytes" => 10 ** 20, "name" => "a.zip"}))
+    end
+
+    test "a request without its upload's token is refused" do
+      {200, %{"upload" => %{"key" => key, "upload_id" => id, "token" => token}}} =
+        call("start", %{"name" => "a.zip", "type" => "application/zip", "bytes" => 6 * @mib})
+
+      {200, %{"upload" => %{"token" => other}}} =
+        call("start", %{"name" => "b.zip", "type" => "application/zip", "bytes" => 6 * @mib})
+
+      for token <- [nil, "forged", other], action <- ~w(sign list complete abort) do
+        body = %{"key" => key, "upload_id" => id, "token" => token, "parts" => [%{"number" => 1}]}
+        assert {403, %{"error" => "invalid_token"}} = call(action, body)
+      end
+
+      named = %{"key" => key, "upload_id" => id, "token" => token}
+      assert {200, %{"ok" => true}} = call("abort", named)
     end
 
     test "another owner's upload is not signed, listed, completed or given up" do
-      {200, %{"upload" => %{"key" => key, "upload_id" => id}}} =
+      {200, %{"upload" => %{"key" => key, "upload_id" => id, "token" => token}}} =
         call("start", %{"name" => "a.zip", "type" => "application/zip", "bytes" => 6 * @mib})
+
+      named = %{"key" => key, "upload_id" => id, "token" => token}
 
       for {action, body} <- [
             {"sign", %{"parts" => [%{"number" => 1}]}},
             {"list", %{}},
-            {"complete", %{"bytes" => 1}},
+            {"complete", %{}},
             {"abort", %{}}
           ] do
-        body = Map.merge(body, %{"key" => key, "upload_id" => id})
-        assert {403, %{"error" => "not_owner"}} = call(action, body, owner: "accounts/8")
+        body = Map.merge(body, named)
+        assert {403, %{"error" => "invalid_token"}} = call(action, body, owner: "accounts/8")
       end
 
-      assert {200, %{"ok" => true}} = call("abort", %{"key" => key, "upload_id" => id})
+      assert {200, %{"ok" => true}} = call("abort", named)
+    end
+
+    test "a body that is not JSON is never read" do
+      conn =
+        conn(:post, "/start", ~s({"name":"a.zip","bytes":1,"x":"="}))
+        |> Map.put(:secret_key_base, String.duplicate("s", 64))
+        |> Plug.Conn.put_req_header("content-type", "text/plain")
+        |> MultipartPlug.call(MultipartPlug.init(adapter: S3))
+
+      assert conn.status == 415
     end
 
     test "what is not the JSON it takes, and a file refused" do
       assert {400, %{"error" => "invalid_request"}} = call("start", %{"name" => "a.zip"})
 
-      assert {400, %{"error" => "invalid_request"}} =
+      assert {403, %{"error" => "invalid_token"}} =
                call("sign", %{"key" => "../x", "upload_id" => "1", "parts" => []})
 
       assert {422, %{"error" => "too_large"}} =
