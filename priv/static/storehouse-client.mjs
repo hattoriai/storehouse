@@ -8,13 +8,15 @@
 //     const queue = createUploadQueue({
 //       presignUrl: "/files/presign",
 //       registerUrl: "/files/register",
-//       headers: {"x-csrf-token": csrfToken},
 //     })
 //
 //     for (const upload of queue.add(input.files)) {
 //       upload.onProgress((fraction) => bar.style.width = `${fraction * 100}%`)
 //       upload.result.then(({status, value}) => ...)
 //     }
+//
+// The page's CSRF token (<meta name="csrf-token">, as Phoenix's layouts
+// have it) goes with each request to the app, unless headers gives one.
 //
 // Each file is read for its SHA-256 (in a Web Worker), presigned with the
 // others added at the same time, sent to the store (a few at once, each
@@ -453,12 +455,21 @@ function forget(storage, name) {
 
 // JSON to the app, with its headers (a CSRF token); an error code from its
 // answer when it refuses the whole batch.
+// The page's CSRF token, from the <meta name="csrf-token"> that Phoenix's
+// (and Rails') layouts render, unless the app's headers have one.
+function csrfHeader(headers) {
+  if (Object.keys(headers).some((name) => name.toLowerCase() === "x-csrf-token")) return {};
+  const meta = typeof document === "undefined" ? null : document.querySelector('meta[name="csrf-token"]');
+  const token = meta && meta.getAttribute("content");
+  return token ? { "x-csrf-token": token } : {};
+}
+
 function defaultFetch(opts) {
   return async (url, body) => {
     const response = await fetch(url, {
       method: "POST",
       credentials: "same-origin",
-      headers: { "content-type": "application/json", accept: "application/json", ...(opts.headers || {}) },
+      headers: { "content-type": "application/json", accept: "application/json", ...csrfHeader(opts.headers || {}), ...(opts.headers || {}) },
       body: JSON.stringify(body),
     });
     const data = await response.json().catch(() => ({}));

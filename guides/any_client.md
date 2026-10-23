@@ -115,7 +115,6 @@ import {createUploadQueue} from "storehouse/client"
 const queue = createUploadQueue({
   presignUrl: "/files/presign",
   registerUrl: "/files/register",
-  headers: {"x-csrf-token": csrfToken},
 })
 
 input.addEventListener("change", () => {
@@ -130,6 +129,10 @@ input.addEventListener("change", () => {
 })
 ```
 
+- The page's CSRF token goes with each request to the app, from the
+  `<meta name="csrf-token">` of Phoenix's root layout, as
+  `Plug.CSRFProtection` expects it. `headers` adds others (an
+  `authorization` for an API with tokens) or gives the token itself.
 - Each file's SHA-256 is read in a Web Worker (the page does not freeze
   on a large file), and sent with its presign: a file the app has comes
   back as `existing`, and is never uploaded.
@@ -165,7 +168,6 @@ const queue = createUploadQueue({
   presignUrl: "/files/presign",
   registerUrl: "/files/register",
   multipartUrl: "/files/multipart",
-  headers: {"x-csrf-token": csrfToken},
 })
 ```
 
