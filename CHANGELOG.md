@@ -9,6 +9,12 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Added
 
+- The config of `Storehouse.S3`, `Storehouse.Local` and `Storehouse.Purge`
+  (and of the stores made with `use`) may be `{module, function, args}`:
+  a function that gives it each time it is needed, so that an app gives
+  keys it keeps encrypted only then, and never leaves them in the
+  application's environment.
+
 - `Storehouse.list/2` lists every file of a store for `""`, as
   `copy_prefix/2` copies them (#61); `delete_prefix/2` still refuses it.
 - `Storehouse.list/2` and `copy_prefix/2` take `:after`, a key: the files

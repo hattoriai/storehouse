@@ -26,6 +26,19 @@ defmodule Storehouse.S3Test do
     %{bucket: bucket, endpoint: endpoint}
   end
 
+  # The bucket's config as a function gives it: keys from a vault.
+  def vault_config(config), do: config
+
+  test "takes its config from a function, each time", %{bucket: bucket} do
+    config = Application.get_env(:storehouse, S3)
+    Application.put_env(:storehouse, S3, {__MODULE__, :vault_config, [config]})
+    source = Path.join(@fixtures, "harbour.jpg")
+
+    assert {:ok, _url} = S3.put("vault/harbour.jpg", source, %{content_type: "image/jpeg"})
+    assert {:ok, %{bytes: 35_367}} = S3.head("vault/harbour.jpg")
+    assert S3.config()[:bucket] == bucket
+  end
+
   # A bucket made, or a signed URL read, as a browser does: no keys.
   defp http(method, url) do
     {:ok, _apps} = Application.ensure_all_started(:inets)

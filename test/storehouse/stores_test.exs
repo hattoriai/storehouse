@@ -106,6 +106,35 @@ defmodule Storehouse.StoresTest do
     assert Storehouse.verify_upload(upload.key) == {:error, :enoent}
   end
 
+  # The config a function gives, each time: a vault's keys.
+  def private_config(root), do: [root: root, url_prefix: "/private", secret: @secret <> "-vault"]
+
+  test "a store's config may be a function that gives it each time", %{roots: roots} do
+    Application.put_env(
+      :storehouse,
+      PrivateFiles,
+      {__MODULE__, :private_config, [roots["private"]]}
+    )
+
+    {:ok, file} = Storehouse.store(@harbour, adapter: PrivateFiles)
+    assert File.exists?(Path.join(roots["private"], file.key))
+    assert file.url == "/private/" <> file.key
+    assert PrivateFiles.config()[:secret] == @secret <> "-vault"
+
+    Application.put_env(
+      :storehouse,
+      Storehouse.Local,
+      {__MODULE__, :private_config, [roots["default"]]}
+    )
+
+    assert Storehouse.Local.config()[:root] == roots["default"]
+
+    Application.put_env(:storehouse, PrivateFiles, {__MODULE__, :nothing, []})
+    assert_raise UndefinedFunctionError, fn -> PrivateFiles.config() end
+    Application.put_env(:storehouse, PrivateFiles, {Map, :new, []})
+    assert_raise ArgumentError, ~r/not a keyword list/, fn -> PrivateFiles.config() end
+  end
+
   test "a stream to a store ends in that store", %{roots: roots} do
     {:ok, stream} =
       PrivateFiles.stream_open("2026/10/streamed.txt", %{content_type: "text/plain"})

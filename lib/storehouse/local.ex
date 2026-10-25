@@ -36,6 +36,9 @@ defmodule Storehouse.Local do
 
           config :storehouse, Storehouse.Local, secret: System.fetch_env!("STOREHOUSE_SECRET")
 
+  The options may be `{module, function, args}` instead, a function that
+  gives them each time they are needed (see `Storehouse.S3`).
+
   Serve the files with `Storehouse.Local.Plug`. Any other way to serve
   them must send `X-Content-Type-Options: nosniff`, a content type from the
   allow-list of `Storehouse.Check`, and `Content-Disposition: attachment`
@@ -68,7 +71,7 @@ defmodule Storehouse.Local do
       @behaviour Storehouse.Adapter
 
       @doc false
-      def config, do: Application.get_env(unquote(otp_app), __MODULE__, [])
+      def config, do: Storehouse.Config.get(unquote(otp_app), __MODULE__)
 
       @doc false
       # What the store is, for a copy made in the store itself (`Storehouse.copy/2`).
@@ -483,7 +486,7 @@ defmodule Storehouse.Local do
 
   @doc false
   # This store's config; a store of `use Storehouse.Local` has its own.
-  def config, do: Application.get_env(:storehouse, __MODULE__, [])
+  def config, do: Storehouse.Config.get(:storehouse, __MODULE__)
 
   @doc false
   def __store__, do: {__MODULE__, config()}
