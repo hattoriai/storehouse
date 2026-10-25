@@ -160,6 +160,15 @@ defmodule Storehouse.Adapter do
   @callback list(prefix :: String.t()) :: {:ok, Enumerable.t()} | {:error, term()}
 
   @doc """
+  As `c:list/1`, from where another listing stopped: with `after: key`,
+  only the files whose keys come after `key`. Optional: a store that can
+  start there itself (S3's `start-after`) has it; for another,
+  `Storehouse.list/2` skips the files before. See `Storehouse.list/2`.
+  """
+  @callback list(prefix :: String.t(), opts :: [after: key()]) ::
+              {:ok, Enumerable.t()} | {:error, term()}
+
+  @doc """
   Deletes the files with `keys`, at most a thousand, at once. A key with no
   file is deleted. Optional: without it, `Storehouse.delete_prefix/2`
   deletes one at a time with `c:delete/1`.
@@ -255,6 +264,7 @@ defmodule Storehouse.Adapter do
               | {:error, term()}
 
   @optional_callbacks uploaded: 1,
+                      list: 2,
                       multipart_start: 2,
                       multipart_sign: 4,
                       multipart_put: 4,

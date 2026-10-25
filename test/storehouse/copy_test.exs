@@ -139,6 +139,20 @@ defmodule Storehouse.CopyTest do
                Storehouse.copy_prefix("", from: PrivateFiles, to: Memory)
     end
 
+    test "goes on after a key, from where a copy stopped" do
+      for name <- ~w(a b c d), do: :ok = write(PrivateFiles, "resume/#{name}.txt", name)
+
+      assert Storehouse.copy_prefix("resume/",
+               from: PrivateFiles,
+               to: Memory,
+               after: "resume/b.txt"
+             ) ==
+               {:ok, %{copied: 2, skipped: 0, failed: []}}
+
+      assert Storehouse.head("resume/b.txt", adapter: Memory) == {:error, :enoent}
+      assert {:ok, _head} = Storehouse.head("resume/c.txt", adapter: Memory)
+    end
+
     test "a file that fails is named, and the others copied" do
       :ok = write(Memory, "few/a.txt", "a")
       :ok = write(Memory, "few/b.txt", "b")

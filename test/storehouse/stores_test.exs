@@ -57,6 +57,8 @@ defmodule Storehouse.StoresTest do
 
     {:ok, entries} = Storehouse.list("2026/", adapter: PrivateFiles)
     assert private.key in Enum.map(entries, & &1.key)
+    {:ok, entries} = Storehouse.list("", adapter: PrivateFiles, after: private.key)
+    refute private.key in Enum.map(entries, & &1.key)
 
     :ok = Storehouse.delete(private.key, adapter: PrivateFiles)
     refute File.exists?(Path.join(roots["private"], private.key))

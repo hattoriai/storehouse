@@ -189,6 +189,12 @@ defmodule Storehouse.S3Test do
     assert Enum.map(listed, & &1.key) == keys
     assert %{bytes: 1, modified_at: %DateTime{}} = hd(listed)
 
+    # From where another listing stopped: the bucket starts there itself.
+    assert {:ok, rest} = Storehouse.list("accounts/1/", adapter: S3, after: "accounts/1/1000.txt")
+    assert Enum.map(rest, & &1.key) == Enum.drop(keys, 1_000)
+    assert {:ok, every} = Storehouse.list("", adapter: S3, after: "accounts/1/1049.txt")
+    assert Enum.map(every, & &1.key) == ["accounts/1/1050.txt", "accounts/10/kept.txt"]
+
     ref = :telemetry_test.attach_event_handlers(self(), [[:storehouse, :delete_prefix, :stop]])
     assert Storehouse.delete_prefix("accounts/1/", adapter: S3) == {:ok, 1_050}
     assert_received {[:storehouse, :delete_prefix, :stop], ^ref, _measurements, %{result: :ok}}

@@ -1488,22 +1488,46 @@ defmodule Storehouse do
   has that `valid_key?/1` refuses is left out.
 
   A prefix is a key, or the start of one: `"cache/"`, `"accounts/42/"`,
-  `"2026/10/0b6"`. Another gives `{:error, :invalid_prefix}`.
+  `"2026/10/0b6"`; `""` lists every file of the store. Another gives
+  `{:error, :invalid_prefix}`.
+
+  A long listing goes on from where another stopped with `:after`: the
+  files whose keys come after that one. A bucket starts there itself
+  (S3's `start-after`), so that a job that moves a million files a slice
+  at a time does not list them all again for each slice.
+
+      {:ok, entries} = Storehouse.list("", after: "2026/10/0b6…-board.png")
 
   ## Options
 
     * `:adapter` - as for `store/2`. The adapter must list files
       (`c:Storehouse.Adapter.list/1`): `Storehouse.Local` and
       `Storehouse.S3` do; another gives `{:error, :not_supported}`.
+    * `:after` - a key: only the files whose keys come after it, in the
+      order of the keys. The store starts there where it can
+      (`c:Storehouse.Adapter.list/2`), else its files before are skipped.
   """
   @spec list(String.t(), keyword()) :: {:ok, Enumerable.t()} | {:error, term()}
   def list(prefix, opts \\ []) when is_binary(prefix) do
     adapter = Keyword.get_lazy(opts, :adapter, &adapter/0)
+    start = Keyword.get(opts, :after)
 
-    with true <- valid_prefix?(prefix) || {:error, :invalid_prefix},
+    with true <- (prefix == "" or valid_prefix?(prefix)) || {:error, :invalid_prefix},
+         true <- (is_nil(start) or is_binary(start)) || {:error, :invalid_key},
          :ok <- supported(adapter, :list, 1),
-         {:ok, entries} <- adapter.list(prefix) do
+         {:ok, entries} <- listed(adapter, prefix, start) do
       {:ok, Stream.filter(entries, &valid_key?(&1.key))}
+    end
+  end
+
+  defp listed(adapter, prefix, nil), do: adapter.list(prefix)
+
+  defp listed(adapter, prefix, start) do
+    if supports?(adapter, :list, 2) do
+      adapter.list(prefix, after: start)
+    else
+      with {:ok, entries} <- adapter.list(prefix),
+           do: {:ok, Stream.drop_while(entries, &(&1.key <= start))}
     end
   end
 
@@ -1559,6 +1583,8 @@ defmodule Storehouse do
       is 4.
     * `:on_progress` - a function of each file's key and result
       (`{:ok, :copied}`, …), as each is done.
+    * `:after` - a key: only the files after it (`list/2`), to go on
+      with a copy from where it stopped.
   """
   @spec copy_prefix(String.t(), keyword()) ::
           {:ok, %{copied: non_neg_integer(), skipped: non_neg_integer(), failed: list()}}
@@ -1573,8 +1599,9 @@ defmodule Storehouse do
   (`c:Storehouse.Adapter.delete_many/1`), one at a time where it does not.
   Gives `{:ok, count}`, the number of files deleted.
 
-  The prefix is never empty: `""` and `"/"` give `{:error, :invalid_prefix}`,
-  as every prefix `list/2` refuses does.
+  The prefix is never empty: `""` and `"/"` give `{:error, :invalid_prefix}`
+  (though `list/2` lists every file for `""`), as every prefix `list/2`
+  refuses does.
 
   ## Options
 
@@ -1586,7 +1613,9 @@ defmodule Storehouse do
 
     result =
       span(:delete_prefix, %{prefix: prefix, adapter: adapter}, fn ->
-        with {:ok, entries} <- list(prefix, adapter: adapter) do
+        # `list/2` lists every file for `""`; no deletion takes them all.
+        with true <- valid_prefix?(prefix) || {:error, :invalid_prefix},
+             {:ok, entries} <- list(prefix, adapter: adapter) do
           entries |> Stream.map(& &1.key) |> delete_keys(adapter)
         end
       end)

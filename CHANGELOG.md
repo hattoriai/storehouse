@@ -7,6 +7,15 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+### Added
+
+- `Storehouse.list/2` lists every file of a store for `""`, as
+  `copy_prefix/2` copies them (#61); `delete_prefix/2` still refuses it.
+- `Storehouse.list/2` and `copy_prefix/2` take `:after`, a key: the files
+  after it, to go on from where a listing or a copy stopped. `Storehouse.S3`
+  starts there itself (`start-after`), through the new optional callback
+  `c:Storehouse.Adapter.list/2`; another store's files before are skipped.
+
 ## [0.2.0] - 2026-10-23
 
 ### Security
