@@ -25,6 +25,18 @@ defmodule Storehouse.S3 do
         secret_access_key: System.fetch_env!("R2_SECRET_ACCESS_KEY"),
         public_url: "https://files.example.com"
 
+  Or a function that gives the options each time they are needed, as
+  `{module, function, args}`: for keys an app keeps encrypted (a vault, its
+  database), so that they never sit in the application's environment, and
+  change without a restart.
+
+      config :storehouse, Storehouse.S3, {MyApp.Storage, :s3_config, []}
+
+      # MyApp.Storage
+      def s3_config, do: [bucket: "uploads", region: "auto", secret_access_key: MyApp.Vault.get!(:s3), ...]
+
+  It is called for each request: keep it quick.
+
   ## Options
 
     * `:bucket`, `:region`, `:access_key_id`, `:secret_access_key`
@@ -98,7 +110,7 @@ defmodule Storehouse.S3 do
       @behaviour Storehouse.Adapter
 
       @doc false
-      def config, do: Application.get_env(unquote(otp_app), __MODULE__, [])
+      def config, do: Storehouse.Config.get(unquote(otp_app), __MODULE__)
 
       @doc false
       # What the store is, for a copy made in the store itself (`Storehouse.copy/2`).
@@ -1049,7 +1061,7 @@ defmodule Storehouse.S3 do
 
   @doc false
   # This store's config; a store of `use Storehouse.S3` has its own.
-  def config, do: Application.get_env(:storehouse, __MODULE__, [])
+  def config, do: Storehouse.Config.get(:storehouse, __MODULE__)
 
   @doc false
   def __store__, do: {__MODULE__, config()}

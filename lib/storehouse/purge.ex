@@ -136,7 +136,7 @@ defmodule Storehouse.Purge do
     end
   end
 
-  defp config, do: Application.get_env(:storehouse, __MODULE__, [])
+  defp config, do: Storehouse.Config.get(:storehouse, __MODULE__)
 
   defp purger do
     case config()[:purger] do
