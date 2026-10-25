@@ -84,8 +84,21 @@ defmodule Storehouse.CleanupTest do
       assert keys("2026/") == ["2026/10/a.png"]
     end
 
-    test "refuses a prefix that is empty or could leave the root" do
-      for prefix <- ["", "/", "../", "a/../../b", "a//"],
+    test "gives every file for an empty prefix, and goes on after a key", %{root: root} do
+      for key <- ~w(accounts/2/b.png accounts/1/z.png accounts/1/a.png other.txt),
+          do: write(root, key)
+
+      assert keys("") == ~w(accounts/1/a.png accounts/1/z.png accounts/2/b.png other.txt)
+      assert keys("", after: "accounts/1/z.png") == ~w(accounts/2/b.png other.txt)
+      assert keys("accounts/", after: "accounts/1/a.png") == ~w(accounts/1/z.png accounts/2/b.png)
+      # A key that is no file's: the files after where it would be.
+      assert keys("", after: "b") == ~w(other.txt)
+      assert keys("", after: "zzz") == []
+      assert Storehouse.list("", after: 42) == {:error, :invalid_key}
+    end
+
+    test "refuses a prefix that could leave the root" do
+      for prefix <- ["/", "../", "a/../../b", "a//"],
           do: assert(Storehouse.list(prefix) == {:error, :invalid_prefix})
     end
   end

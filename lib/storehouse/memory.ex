@@ -309,6 +309,14 @@ defmodule Storehouse.Memory do
   end
 
   @impl Storehouse.Adapter
+  def list(prefix, opts) do
+    start = Keyword.get(opts, :after)
+
+    with {:ok, entries} <- list(prefix),
+         do: {:ok, Enum.filter(entries, &(is_nil(start) or &1.key > start))}
+  end
+
+  @impl Storehouse.Adapter
   def list(prefix) do
     with :ok <- failure(:list) do
       owner = owner()

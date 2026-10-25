@@ -30,7 +30,7 @@ defmodule Storehouse.Copy do
 
     :telemetry.span([:storehouse, :copy_prefix], meta, fn ->
       result =
-        with {:ok, entries} <- listed(prefix, from) do
+        with {:ok, entries} <- listed(prefix, from, opts) do
           copy_all(entries, opts, concurrency, progress)
         end
 
@@ -38,18 +38,8 @@ defmodule Storehouse.Copy do
     end)
   end
 
-  # Every file for `""`, which `Storehouse.list/2` refuses so that no
-  # deletion takes them all.
-  defp listed("", from) do
-    if Code.ensure_loaded?(from) and function_exported?(from, :list, 1) do
-      with {:ok, entries} <- from.list(""),
-           do: {:ok, Stream.filter(entries, &Storehouse.valid_key?(&1.key))}
-    else
-      {:error, :not_supported}
-    end
-  end
-
-  defp listed(prefix, from), do: Storehouse.list(prefix, adapter: from)
+  defp listed(prefix, from, opts),
+    do: Storehouse.list(prefix, adapter: from, after: Keyword.get(opts, :after))
 
   defp stores!(opts) do
     from = Keyword.fetch!(opts, :from)

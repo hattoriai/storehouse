@@ -97,6 +97,8 @@ defmodule Storehouse.Local do
       @impl true
       def list(prefix), do: Storehouse.Local.list(config(), prefix)
       @impl true
+      def list(prefix, opts), do: Storehouse.Local.list(config(), prefix, opts)
+      @impl true
       def delete_many(keys), do: Storehouse.Local.delete_many(config(), keys)
       @impl true
       def copy(from, to), do: Storehouse.Local.copy(config(), from, to)
@@ -318,10 +320,17 @@ defmodule Storehouse.Local do
   # The files under the prefix's directory, but for those of streams not
   # closed yet (`stream_open/2`), in the order of their keys.
   @impl Storehouse.Adapter
-  def list(prefix), do: list(config(), prefix)
+  def list(prefix), do: list(config(), prefix, [])
+
+  @impl Storehouse.Adapter
+  # The files after a key: those before are walked, not read. With a
+  # config first, the store's own listing.
+  def list(prefix, opts) when is_binary(prefix), do: list(config(), prefix, opts)
+  def list(c, prefix) when is_list(c), do: list(c, prefix, [])
 
   @doc false
-  def list(c, prefix) do
+  def list(c, prefix, opts) do
+    start = Keyword.get(opts, :after)
     root = root(c)
     dir = if String.ends_with?(prefix, "/"), do: prefix, else: Path.dirname(prefix)
 
@@ -332,6 +341,7 @@ defmodule Storehouse.Local do
         key = Path.relative_to(path, root)
 
         with true <- String.starts_with?(key, prefix) and not Regex.match?(@part, key),
+             true <- is_nil(start) or key > start,
              {:ok, %File.Stat{type: :regular, size: size, mtime: mtime}} <-
                File.stat(path, time: :posix) do
           [%{key: key, bytes: size, modified_at: DateTime.from_unix!(mtime)}]

@@ -32,6 +32,15 @@ defmodule Storehouse.MemoryTest do
     assert :ok = Memory.copy(file.key, "copies/harbour.jpg")
     assert {:ok, entries} = Storehouse.list("copies/", adapter: Memory)
     assert [%{key: "copies/harbour.jpg", bytes: 35_367}] = Enum.to_list(entries)
+    assert {:ok, every} = Storehouse.list("", adapter: Memory)
+
+    assert every |> Enum.map(& &1.key) |> Enum.sort() ==
+             Enum.sort([file.key, "copies/harbour.jpg"])
+
+    assert {:ok, after_copies} = Storehouse.list("", adapter: Memory, after: "copies/harbour.jpg")
+
+    assert Enum.map(after_copies, & &1.key) ==
+             Enum.filter([file.key], &(&1 > "copies/harbour.jpg"))
 
     assert Storehouse.delete_prefix("copies/", adapter: Memory) == {:ok, 1}
     assert :ok = Storehouse.delete(file.key, adapter: Memory)

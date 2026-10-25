@@ -125,6 +125,8 @@ defmodule Storehouse.S3 do
       @impl true
       def list(prefix), do: Storehouse.S3.list(config(), prefix)
       @impl true
+      def list(prefix, opts), do: Storehouse.S3.list(config(), prefix, opts)
+      @impl true
       def delete_many(keys), do: Storehouse.S3.delete_many(config(), keys)
       @impl true
       def copy(from, to), do: Storehouse.S3.copy(config(), from, to)
@@ -387,19 +389,29 @@ defmodule Storehouse.S3 do
 
   # A page of ListObjectsV2 at a time, as the stream is taken.
   @impl Storehouse.Adapter
-  def list(prefix), do: list(config(), prefix)
+  def list(prefix), do: list(config(), prefix, [])
+
+  @impl Storehouse.Adapter
+  # The bucket starts after the key itself (`start-after`). With a config
+  # first, the store's own listing.
+  def list(prefix, opts) when is_binary(prefix), do: list(config(), prefix, opts)
+  def list(c, prefix) when is_list(c), do: list(c, prefix, [])
 
   @doc false
-  def list(c, prefix) do
-    {:ok, Stream.resource(fn -> :first end, &list_page(c, prefix, &1), fn _token -> :ok end)}
+  def list(c, prefix, opts) do
+    first = {:first, Keyword.get(opts, :after)}
+    {:ok, Stream.resource(fn -> first end, &list_page(c, prefix, &1), fn _token -> :ok end)}
   end
 
   defp list_page(_c, _prefix, :done), do: {:halt, :done}
 
   defp list_page(c, prefix, token) do
     params =
-      %{"list-type" => "2", "prefix" => prefix}
-      |> then(&if token == :first, do: &1, else: Map.put(&1, "continuation-token", token))
+      case token do
+        {:first, nil} -> %{"list-type" => "2", "prefix" => prefix}
+        {:first, start} -> %{"list-type" => "2", "prefix" => prefix, "start-after" => start}
+        token -> %{"list-type" => "2", "prefix" => prefix, "continuation-token" => token}
+      end
 
     case request(c, :get, query(bucket_uri(c), params), [], nil) do
       {:ok, 200, _headers, body} ->
