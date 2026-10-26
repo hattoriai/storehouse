@@ -7,6 +7,11 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-26
+
+A store's config may be a function that gives it each time, and a listing
+goes on from where it stopped.
+
 ### Added
 
 - The config of `Storehouse.S3`, `Storehouse.Local` and `Storehouse.Purge`

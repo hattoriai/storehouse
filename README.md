@@ -20,7 +20,7 @@ You need Elixir 1.17+. `Storehouse.Live` also needs Phoenix LiveView
 Add Storehouse to the deps in `mix.exs`:
 
 ```elixir
-{:storehouse, "~> 0.2"}
+{:storehouse, "~> 0.3"}
 ```
 
 On Elixir 1.17, add `{:jason, "~> 1.4"}` too. 1.18 and later have their
