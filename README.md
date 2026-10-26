@@ -2,6 +2,18 @@
 
 ![Storehouse — Files for Phoenix](https://raw.githubusercontent.com/hattoriai/storehouse/main/media/banner.png)
 
+<p>
+  <a href="https://hex.pm/packages/storehouse">
+    <img alt="Hex Version" src="https://img.shields.io/hexpm/v/storehouse.svg">
+  </a>
+  <a href="https://hexdocs.pm/storehouse">
+    <img src="https://img.shields.io/badge/docs-hexdocs-blue" alt="HexDocs">
+  </a>
+  <a href="https://github.com/hattoriai/storehouse/actions">
+    <img alt="CI Status" src="https://github.com/hattoriai/storehouse/actions/workflows/ci.yml/badge.svg">
+  </a>
+</p>
+
 **Files for Phoenix: uploads checked by their bytes, stored under safe
 keys, and served safely.**
 
