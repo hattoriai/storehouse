@@ -7,6 +7,19 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-26
+
+Storehouse starts `:inets`, whose HTTP dates it reads.
+
+### Fixed
+
+- Storehouse lists `:inets` among its applications: `Storehouse.Proxy`
+  (a request's `If-Modified-Since`) and `Storehouse.S3` (a file's
+  `Last-Modified`) read HTTP dates with `:httpd_util`, part of `:inets`.
+  An app's release without `:inets` failed on those with an
+  `UndefinedFunctionError`, and compiling Storehouse as a dependency
+  warned that `:httpd_util.convert_request_date/1` was undefined.
+
 ## [0.3.0] - 2026-10-26
 
 A store's config may be a function that gives it each time, and a listing
