@@ -1,7 +1,7 @@
 defmodule Storehouse.MixProject do
   use Mix.Project
 
-  @version "0.3.0"
+  @version "0.3.1"
   @source_url "https://github.com/hattoriai/storehouse"
 
   def project do
@@ -28,7 +28,9 @@ defmodule Storehouse.MixProject do
   end
 
   def application do
-    [extra_applications: [:logger, :crypto]]
+    # :inets for :httpd_util, which reads a request's or S3's HTTP dates
+    # (Storehouse.Proxy's If-Modified-Since, Storehouse.S3's Last-Modified).
+    [extra_applications: [:logger, :crypto, :inets]]
   end
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
