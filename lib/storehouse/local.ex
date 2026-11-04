@@ -130,11 +130,22 @@ defmodule Storehouse.Local do
   def put(key, path, meta), do: put(config(), key, path, meta)
 
   @doc false
+  # Copied beside its key, then renamed into place: a reader never sees a
+  # part of the file, and a copy that fails (a full disk) leaves nothing at
+  # the key. A put of a key that has a file replaces it, as before.
   def put(c, key, path, _meta) do
     with {:ok, destination} <- path(c, key),
-         :ok <- File.mkdir_p(Path.dirname(destination)),
-         :ok <- File.cp(path, destination) do
-      {:ok, url(c, key)}
+         :ok <- File.mkdir_p(Path.dirname(destination)) do
+      part = destination <> ".part-" <> Integer.to_string(System.unique_integer([:positive]))
+
+      with :ok <- File.cp(path, part),
+           :ok <- File.rename(part, destination) do
+        {:ok, url(c, key)}
+      else
+        {:error, _reason} = error ->
+          _removed = File.rm(part)
+          error
+      end
     end
   end
 
