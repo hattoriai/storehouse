@@ -43,6 +43,30 @@ defmodule Storehouse.LocalTest do
     assert {:error, :enoent} = Local.put("a/b.txt", "/no/such/file", %{})
   end
 
+  # Written beside the key and renamed into place: no part of a file at its
+  # key, and nothing left beside it, whatever happens.
+  test "put/3 leaves no file at the key, nor beside it, when it fails", %{root: root} do
+    directory =
+      Path.join(System.tmp_dir!(), "storehouse-dir-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(directory)
+    on_exit(fn -> File.rm_rf!(directory) end)
+
+    assert {:error, _reason} = Local.put("2026/11/a.txt", directory, %{})
+    assert {:error, :enoent} = Local.put("2026/11/b.txt", "/no/such/file", %{})
+    assert File.ls!(Path.join(root, "2026/11")) == []
+  end
+
+  test "put/3 leaves only the file, and a second put of the key replaces it whole",
+       %{root: root, source: source} do
+    assert {:ok, _url} = Local.put("2026/11/a.txt", source, %{})
+    File.write!(source, "a longer file body")
+    assert {:ok, _url} = Local.put("2026/11/a.txt", source, %{})
+
+    assert File.ls!(Path.join(root, "2026/11")) == ["a.txt"]
+    assert File.read!(Path.join(root, "2026/11/a.txt")) == "a longer file body"
+  end
+
   test "url/1 uses the default prefix" do
     Application.put_env(:storehouse, Storehouse.Local, root: "tmp")
     assert Local.url("2026/09/a.png") == "/uploads/2026/09/a.png"

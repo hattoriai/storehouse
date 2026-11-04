@@ -7,6 +7,16 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-04
+
+### Fixed
+
+- `Storehouse.Local` writes a file beside its key and renames it into
+  place, as a streamed upload already did. Before, it copied the file to
+  its key directly: a reader could see a part of it, and a copy that
+  failed (a full disk) left that part at the key, which nothing removed.
+  A put of a key that has a file still replaces it.
+
 ## [0.3.1] - 2026-10-26
 
 Storehouse starts `:inets`, whose HTTP dates it reads.
