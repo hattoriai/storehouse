@@ -7,6 +7,21 @@ and Storehouse follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-10
+
+### Added
+
+- A photograph's own crop: `Storehouse.variant_url/3` and
+  `Storehouse.variant/3` take `crop: {x, y, width, height}`, fractions of
+  the upright original, for an avatar its owner framed. Each crop is its
+  own variant, with its own key and URL; a URL without one is as before.
+  `Storehouse.Renderer.Vix` cuts the crop from the original loaded only as
+  large as it needs, then fills or fits the preset's box;
+  `Storehouse.Renderer.Imgproxy` gives it as `c:` with an `fp` gravity.
+  In the plug's URLs the crop is in the query, signed with the new
+  `:secret` of `Storehouse.Variants` (32 bytes or more); a crop without its
+  signature is `404`. `Storehouse.Variant` has a `:crop` field.
+
 ## [0.3.2] - 2026-11-04
 
 ### Fixed

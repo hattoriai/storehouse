@@ -1,6 +1,6 @@
 {
   "name": "@hattoriai/storehouse",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Files for Phoenix: the uploader of Storehouse's direct uploads for LiveView, and an upload client for any frontend.",
   "license": "MIT",
   "repository": {

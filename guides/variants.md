@@ -164,6 +164,36 @@ point, which a URL for the plug cannot carry:
 Storehouse.variant_url(file, :social, focus: {photo.focus_x, photo.focus_y})
 ```
 
+## A photograph's own crop
+
+An avatar its owner moved and zoomed in a round frame is made from that
+part of the photograph only. Keep the crop beside the file, as
+`{x, y, width, height}` in fractions of the upright original from its top
+left, and give it to each call:
+
+```elixir
+Storehouse.variant_url(photo.image, :avatar, crop: {photo.crop_x, photo.crop_y, photo.crop_w, photo.crop_h})
+#=> "/variants/…/rex.jpg/avatar-288-9c1d04aa?crop=0.2,0.1,0.5,0.5&sig=…"
+```
+
+The preset's box is then filled from the crop's middle, or the crop
+fitted in it; its `:focus` is not used. Each crop is its own variant, with
+its own key and URL, kept to four decimals: a crop changed is a new URL,
+which no CDN has kept, and a crop given again is the variant already made.
+Without a crop, a URL is as it was.
+
+In the plug's URLs the crop is signed, so no one can have the server
+render a crop the app did not give: configure a secret of 32 bytes or
+more, the endpoint's `secret_key_base` for one.
+
+```elixir
+# config/runtime.exs
+config :storehouse, Storehouse.Variants, secret: secret_key_base
+```
+
+A crop without its signature, or with another's, is `404`. imgproxy's
+URLs carry it as `c:` with an `fp` gravity, signed as the rest of them.
+
 ## A renderer of your own
 
 A renderer is a module of `Storehouse.Renderer` that implements one or

@@ -36,6 +36,9 @@ defmodule Storehouse.Variants do
       default is `"variants/"`.
     * `:timeout` - how long a caller waits for a variant another is making,
       in milliseconds. The default is 60 seconds.
+    * `:secret` - at least 32 bytes (the endpoint's `secret_key_base`),
+      which signs a file's own crop in the plug's URLs. Needed only for
+      `:crop` without a renderer of URLs.
 
   Each can be given to a call, for an app with variants of several kinds.
 
@@ -68,6 +71,21 @@ defmodule Storehouse.Variants do
   A preset changed gives its variants new URLs and keys: a CDN's copy, kept
   for a year, is never of an older preset. The variants of the old one stay
   until their original is deleted, or the prefix is.
+
+  ## A file's own crop
+
+  A photograph framed by its owner (an avatar moved and zoomed in a round
+  frame) is made from that part of it only, at the preset's sizes:
+
+      Storehouse.variant_url(file, :avatar, crop: {0.2, 0.1, 0.5, 0.5})
+      #=> "/variants/2026/10/0b6…/rex.jpg/avatar-288-9c1d04aa?crop=0.2,0.1,0.5,0.5&sig=…"
+
+  The crop is `{x, y, width, height}`, fractions of the upright original
+  from its top left, kept to four decimals. Each crop is its own variant,
+  with its own key and URL: a crop changed is a new URL. In the plug's
+  URLs it is signed with the `:secret`, so no one can have the server
+  render a crop the app did not give; imgproxy's are signed as the rest of
+  the URL is.
   """
 
   require Logger
@@ -93,7 +111,10 @@ defmodule Storehouse.Variants do
       next one up, or its widest. The default is its widest.
     * `:focus` - what a crop keeps, for this file (a photograph's own
       focus point): only with a renderer of URLs, which signs it.
-    * The configuration's (`:presets`, `:renderer`, `:url`), for this call.
+    * `:crop` - this file's own crop, `{x, y, width, height}` (see "A
+      file's own crop"). With the plug's URLs, it needs the `:secret`.
+    * The configuration's (`:presets`, `:renderer`, `:url`, `:secret`),
+      for this call.
   """
   @spec url(Storehouse.File.t() | String.t(), atom(), keyword()) :: String.t()
   def url(file_or_key, preset, opts \\ []) do
@@ -107,6 +128,9 @@ defmodule Storehouse.Variants do
     else
       if Keyword.has_key?(opts, :focus),
         do: raise(ArgumentError, ":focus is for a renderer of URLs, which signs it")
+
+      if variant.crop && not secret?(config.secret),
+        do: raise(ArgumentError, ":crop in the plug's URLs needs :secret, at least 32 bytes")
 
       plug_url(variant, config)
     end
@@ -126,6 +150,7 @@ defmodule Storehouse.Variants do
   ## Options
 
     * `:width` - as for `url/3`.
+    * `:crop` - as for `url/3`.
     * `:accept` - the browser's `Accept` header, for a preset of several
       formats; or `:format`, one of them. The default is the last.
     * `:adapter` - the store, of the original and of its variants.
@@ -293,9 +318,84 @@ defmodule Storehouse.Variants do
       renderer: renderer(Keyword.get_lazy(config, :renderer, &default_renderer/0)),
       url: config |> Keyword.get(:url, "/variants") |> String.trim_trailing("/"),
       prefix: Keyword.get(config, :prefix, "variants/"),
-      timeout: Keyword.get(config, :timeout, 60_000)
+      timeout: Keyword.get(config, :timeout, 60_000),
+      secret: Keyword.get(config, :secret)
     }
   end
+
+  defp secret?(secret), do: is_binary(secret) and byte_size(secret) >= 32
+
+  @doc false
+  # The signature of a file's own crop in the plug's URLs: of the key, the
+  # preset and the crop, so it holds at each of the preset's widths.
+  def crop_signature(config, key, preset_name, crop) do
+    :hmac
+    |> :crypto.mac(:sha256, config.secret, "#{key}\n#{preset_name}\n#{crop_param(crop)}")
+    |> binary_part(0, 16)
+    |> Base.url_encode64(padding: false)
+  end
+
+  @doc false
+  # The crop of a plug's request, when its signature holds: `{:ok, crop}`,
+  # `{:ok, nil}` without one, or `:error`.
+  def crop_for(config, key, preset_name, %{"crop" => param, "sig" => sig})
+      when is_binary(param) and is_binary(sig) do
+    with true <- secret?(config.secret),
+         {:ok, crop} <- parse_crop(param),
+         true <- Plug.Crypto.secure_compare(crop_signature(config, key, preset_name, crop), sig) do
+      {:ok, crop}
+    else
+      _ -> :error
+    end
+  end
+
+  def crop_for(_config, _key, _preset_name, %{"crop" => _}), do: :error
+  def crop_for(_config, _key, _preset_name, _params), do: {:ok, nil}
+
+  defp parse_crop(param) do
+    with [_, _, _, _] = parts <- String.split(param, ","),
+         numbers when length(numbers) == 4 <- Enum.flat_map(parts, &number/1),
+         {:ok, crop} <- crop(List.to_tuple(numbers)),
+         # Only the URL's own spelling: one crop, one URL, one key.
+         true <- crop_param(crop) == param do
+      {:ok, crop}
+    else
+      _ -> :error
+    end
+  end
+
+  # A crop, checked and kept to four decimals: `{:ok, crop}` or `{:error, message}`.
+  defp crop(nil), do: {:ok, nil}
+
+  defp crop({x, y, w, h} = crop)
+       when is_number(x) and is_number(y) and is_number(w) and is_number(h) do
+    {x, y, w, h} = crop |> Tuple.to_list() |> Enum.map(&Float.round(&1 / 1, 4)) |> List.to_tuple()
+
+    if inside?(x, w) and inside?(y, h),
+      do: {:ok, {x, y, Float.round(min(w, 1 - x), 4), Float.round(min(h, 1 - y), 4)}},
+      else: {:error, crop_error()}
+  end
+
+  defp crop(_crop), do: {:error, crop_error()}
+
+  # From a point, a length inside the original, to a rounding.
+  defp inside?(from, length), do: from >= 0 and length > 0 and from + length <= 1.0001
+
+  defp number(part) do
+    case Float.parse(part) do
+      {number, ""} -> [number]
+      _not_one -> []
+    end
+  end
+
+  defp crop_error,
+    do: ":crop is {x, y, width, height}, fractions from 0 to 1 of the original, inside it"
+
+  defp crop_param({_, _, _, _} = crop),
+    do: crop |> Tuple.to_list() |> Enum.map_join(",", &decimal/1)
+
+  defp decimal(value),
+    do: :erlang.float_to_binary(Float.round(value / 1, 4), [:compact, decimals: 4])
 
   @doc false
   # The preset of a plug's request, its variant and the variant's current
@@ -318,9 +418,19 @@ defmodule Storehouse.Variants do
     do: variant(file(file), preset, Keyword.put(opts, :width, width), purpose)
 
   @doc false
-  def plug_url(%Variant{} = variant, config),
-    do:
+  def plug_url(%Variant{} = variant, config) do
+    path =
       "#{config.url}/#{variant.source}/#{variant.preset}-#{variant.width}-#{variant.fingerprint}"
+
+    case variant.crop do
+      nil ->
+        path
+
+      crop ->
+        sig = crop_signature(config, variant.source, variant.preset, crop)
+        path <> "?crop=" <> crop_param(crop) <> "&sig=" <> sig
+    end
+  end
 
   @doc false
   # The stored key of a variant.
@@ -521,6 +631,12 @@ defmodule Storehouse.Variants do
     focus = Keyword.get(opts, :focus, preset.focus)
     with {:error, message} <- focus(focus), do: raise(ArgumentError, message)
 
+    crop =
+      case crop(Keyword.get(opts, :crop)) do
+        {:ok, crop} -> crop
+        {:error, message} -> raise ArgumentError, message
+      end
+
     format =
       cond do
         purpose == :url and length(preset.formats) > 1 -> preset.formats
@@ -536,6 +652,7 @@ defmodule Storehouse.Variants do
       height: height(preset, width),
       fit: preset.fit,
       focus: focus,
+      crop: crop,
       format: format,
       quality: preset.quality,
       profile: preset.profile,
@@ -569,22 +686,26 @@ defmodule Storehouse.Variants do
   defp format(format, _file), do: format
 
   # Eight hex digits of what makes the image, the preset's formats (not the
-  # one chosen, which the key has) among them.
+  # one chosen, which the key has) among them. A crop only when there is
+  # one: the variants made before crops keep their keys.
   defp fingerprint(variant, preset) do
+    crop = if variant.crop, do: [crop_param(variant.crop)], else: []
+
     made =
       Enum.map_join(
-        [
-          variant.width,
-          variant.height,
-          variant.fit,
-          inspect(variant.focus),
-          Enum.join(preset.formats, ","),
-          variant.quality,
-          variant.profile,
-          variant.metadata,
-          variant.background,
-          inspect(Enum.sort(variant.options))
-        ],
+        crop ++
+          [
+            variant.width,
+            variant.height,
+            variant.fit,
+            inspect(variant.focus),
+            Enum.join(preset.formats, ","),
+            variant.quality,
+            variant.profile,
+            variant.metadata,
+            variant.background,
+            inspect(Enum.sort(variant.options))
+          ],
         ";",
         &to_string/1
       )

@@ -103,6 +103,7 @@ defmodule Storehouse.Renderer.Imgproxy do
   defp processing(variant, opts) do
     Enum.reject(
       [
+        crop(variant),
         size(variant),
         variant.quality && "q:#{variant.quality}",
         format(variant, opts),
@@ -118,8 +119,20 @@ defmodule Storehouse.Renderer.Imgproxy do
   defp size(%{fit: :inside, height: nil, width: width}), do: "w:#{width}"
   defp size(%{fit: :inside} = variant), do: "rs:fit:#{variant.width}:#{variant.height}"
 
+  defp size(%{fit: :cover, crop: {_, _, _, _}} = variant),
+    do: "rs:fill:#{variant.width}:#{variant.height}/g:ce"
+
   defp size(%{fit: :cover} = variant),
     do: "rs:fill:#{variant.width}:#{variant.height}/" <> gravity(variant.focus)
+
+  # A file's own crop, before the resize: its size in fractions of the
+  # original's, around its middle.
+  defp crop(%{crop: {x, y, w, h}}),
+    do:
+      "c:#{decimal(w)}:#{decimal(h)}:fp:#{decimal(Float.round(x + w / 2, 4))}:" <>
+        decimal(Float.round(y + h / 2, 4))
+
+  defp crop(_variant), do: nil
 
   defp gravity({x, y}), do: "g:fp:#{decimal(x)}:#{decimal(y)}"
   defp gravity(focus), do: Map.fetch!(@gravity, focus)

@@ -119,4 +119,59 @@ defmodule Storehouse.VariantsPlugTest do
     refute get("/img" <> rest).halted
     refute VariantsPlug.call(conn(:post, "/variants" <> rest), @opts).halted
   end
+
+  describe "a file's own crop" do
+    @secret String.duplicate("s", 32)
+    @crop_opts [
+      presets: [avatar: [width: 100, height: 100, fit: :cover]],
+      adapter: Memory,
+      secret: @secret
+    ]
+
+    test "made from its signed URL", %{original: file} do
+      url = Storehouse.variant_url(file, :avatar, @crop_opts ++ [crop: {0.5, 0.5, 0.5, 0.5}])
+      conn = get(url, [], @crop_opts)
+
+      assert conn.status == 200
+      {:ok, image} = Image.new_from_buffer(conn.resp_body)
+      assert {Image.width(image), Image.height(image)} == {100, 100}
+    end
+
+    test "not without its signature, or with another's", %{original: file} do
+      url = Storehouse.variant_url(file, :avatar, @crop_opts ++ [crop: {0.5, 0.5, 0.5, 0.5}])
+      [path, _query] = String.split(url, "?")
+      other = Storehouse.variant_url(file, :avatar, @crop_opts ++ [crop: {0, 0, 0.5, 0.5}])
+      [_, other_sig] = String.split(other, "&sig=")
+
+      for bad <- [
+            path <> "?crop=0.5,0.5,0.5,0.5",
+            path <> "?crop=0.5,0.5,0.5,0.5&sig=" <> other_sig,
+            path <> "?crop=0.50,0.5,0.5,0.5&" <> (url |> String.split("&") |> List.last())
+          ] do
+        assert get(bad, [], @crop_opts).status == 404, bad
+      end
+
+      assert get(url, [], Keyword.delete(@crop_opts, :secret)).status == 404
+    end
+
+    test "a preset since changed is sent to its current URL, with its crop", %{original: file} do
+      crop = {0.5, 0.5, 0.5, 0.5}
+
+      old =
+        Storehouse.variant_url(
+          file,
+          :avatar,
+          Keyword.put(@crop_opts, :presets,
+            avatar: [width: 100, height: 100, fit: :cover, quality: 50]
+          ) ++
+            [crop: crop]
+        )
+
+      conn = get(old, [], @crop_opts)
+      assert conn.status == 302
+
+      assert get_resp_header(conn, "location") ==
+               [Storehouse.variant_url(file, :avatar, @crop_opts ++ [crop: crop])]
+    end
+  end
 end
