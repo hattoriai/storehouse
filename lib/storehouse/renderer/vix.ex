@@ -13,7 +13,9 @@ if Code.ensure_loaded?(Vix.Vips.Operation) do
     (or its profile kept, with `profile: :keep`), and saved without its
     metadata unless the preset keeps it (`metadata: :all`). A crop to a
     point (`focus: {x, y}`) keeps that point as near the middle as the
-    image allows.
+    image allows. A file's own crop (`crop: {x, y, w, h}`) is cut from the
+    image loaded only as large as the crop needs, then its box filled
+    from its middle, or fitted.
 
     Which formats it reads and writes is libvips's: the precompiled one Vix
     brings reads JPEG, PNG, WebP, TIFF, GIF and AVIF, and writes all but
@@ -50,6 +52,25 @@ if Code.ensure_loaded?(Vix.Vips.Operation) do
            {:ok, image} <- coloured(image, variant),
            {:ok, image} <- flattened(image, variant) do
         Image.write_to_file(image, destination <> saved(variant, opts))
+      end
+    end
+
+    defp sized(source, %{crop: {x, y, w, h}} = variant) do
+      # Loaded as small as the crop allows, the crop cut out, then its box
+      # filled (from the crop's middle) or fitted.
+      with {:ok, header} <- Image.new_from_file(source),
+           {width, height} = upright(header),
+           scale = min(1, crop_scale(variant, w * width, h * height)),
+           {:ok, image} <-
+             thumbnail(source, max(ceil(width * scale), 1), max(ceil(height * scale), 1), variant),
+           {:ok, part} <- cut(image, x, y, w, h),
+           {:ok, part} <- shaped(part, variant) do
+        Operation.thumbnail_image(
+          part,
+          variant.width,
+          height: variant.height || @any,
+          size: :VIPS_SIZE_DOWN
+        )
       end
     end
 
@@ -105,6 +126,40 @@ if Code.ensure_loaded?(Vix.Vips.Operation) do
         {:ok, turned} when turned in 5..8 -> {Image.height(image), Image.width(image)}
         _upright -> {Image.width(image), Image.height(image)}
       end
+    end
+
+    # How much the original may shrink, its crop still as large as the box
+    # needs: covering it, or fitting in it.
+    defp crop_scale(%{fit: :cover} = variant, width, height),
+      do: max(variant.width / width, variant.height / height)
+
+    defp crop_scale(variant, width, height),
+      do: min(variant.width / width, (variant.height || @any) / height)
+
+    # To cover the box, the crop's middle in the box's proportions: so even
+    # a crop smaller than the box, never enlarged, has its shape.
+    defp shaped(part, %{fit: :cover} = variant) do
+      {width, height} = {Image.width(part), Image.height(part)}
+      aspect = variant.width / variant.height
+
+      {across, down} =
+        if width / height > aspect,
+          do: {max(round(height * aspect), 1), height},
+          else: {width, max(round(width / aspect), 1)}
+
+      Operation.extract_area(part, div(width - across, 2), div(height - down, 2), across, down)
+    end
+
+    defp shaped(part, _variant), do: {:ok, part}
+
+    # The crop's part of the image, in fractions, a pixel at least.
+    defp cut(image, x, y, w, h) do
+      {iw, ih} = {Image.width(image), Image.height(image)}
+      left = clamp(round(x * iw), iw - 1)
+      top = clamp(round(y * ih), ih - 1)
+      across = round(w * iw) |> max(1) |> min(iw - left)
+      down = round(h * ih) |> max(1) |> min(ih - top)
+      Operation.extract_area(image, left, top, across, down)
     end
 
     defp clamp(value, most), do: value |> max(0) |> min(max(most, 0))

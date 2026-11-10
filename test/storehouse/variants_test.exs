@@ -3,7 +3,7 @@ defmodule Storehouse.VariantsTest do
 
   alias Storehouse.Memory
   alias StorehouseTest.Renderers.{Counting, Urls}
-  alias Vix.Vips.Image
+  alias Vix.Vips.{Image, Operation}
 
   @fixtures Path.expand("../fixtures", __DIR__)
   @presets [
@@ -228,6 +228,125 @@ defmodule Storehouse.VariantsTest do
 
     test "a renderer of URLs makes none", %{original: file} do
       assert {:error, :not_supported} = Storehouse.variant(file, :thumb, opts(renderer: Urls))
+    end
+  end
+
+  describe "a file's own crop" do
+    @secret String.duplicate("s", 32)
+
+    defp mean(%Image{} = image) do
+      {:ok, mean} = Operation.avg(image)
+      mean
+    end
+
+    defp mean_of(file) do
+      {:ok, bytes} = Storehouse.read(file.key, adapter: Memory)
+      {:ok, image} = Image.new_from_buffer(bytes)
+      mean(image)
+    end
+
+    test "in the plug's URL, signed, its own variant", %{original: file} do
+      plain = Storehouse.variant_url(file, :square, opts())
+
+      url =
+        Storehouse.variant_url(file, :square, opts(secret: @secret, crop: {0.5, 0.25, 0.5, 0.5}))
+
+      assert url =~ ~r"/square-100-[0-9a-f]{8}\?crop=0\.5,0\.25,0\.5,0\.5&sig=[\w-]{22}\z"
+      refute String.starts_with?(url, plain)
+
+      other = Storehouse.variant_url(file, :square, opts(secret: @secret, crop: {0, 0, 0.5, 0.5}))
+      assert other != url
+    end
+
+    test "no crop, the URL of before", %{original: file} do
+      assert Storehouse.variant_url(file, :square, opts(secret: @secret)) ==
+               Storehouse.variant_url(file, :square, opts())
+
+      assert Storehouse.variant_url(file, :square, opts(crop: nil)) ==
+               Storehouse.variant_url(file, :square, opts())
+    end
+
+    test "kept to four decimals: one crop, one URL", %{original: file} do
+      assert Storehouse.variant_url(
+               file,
+               :square,
+               opts(secret: @secret, crop: {0.1, 0.1, 0.5, 0.5})
+             ) ==
+               Storehouse.variant_url(
+                 file,
+                 :square,
+                 opts(secret: @secret, crop: {0.100004, 0.1, 0.5, 0.49999999})
+               )
+    end
+
+    test "needs the secret in the plug's URLs, not a renderer's own", %{original: file} do
+      assert_raise ArgumentError, ~r/:secret/, fn ->
+        Storehouse.variant_url(file, :square, opts(crop: {0, 0, 0.5, 0.5}))
+      end
+
+      assert Storehouse.variant_url(file, :photo, opts(renderer: Urls, crop: {0, 0, 0.5, 0.5}))
+    end
+
+    test "inside the original, or it raises", %{original: file} do
+      for crop <- [{-0.1, 0, 0.5, 0.5}, {0, 0, 0, 0.5}, {0.6, 0, 0.5, 0.5}, {0, 0, 0.5}, :all] do
+        assert_raise ArgumentError, ~r/:crop/, fn ->
+          Storehouse.variant_url(file, :square, opts(secret: @secret, crop: crop))
+        end
+      end
+    end
+
+    test "made of that part of the original only", %{original: file} do
+      {:ok, original} = Image.new_from_file(Path.join(@fixtures, "harbour.jpg"))
+
+      for {crop, {left, top, width, height}} <- [
+            {{0, 0, 0.5, 0.5}, {0, 0, 600, 400}},
+            {{0.5, 0.5, 0.5, 0.5}, {600, 400, 600, 400}}
+          ] do
+        {:ok, square} = Storehouse.variant(file, :square, opts(crop: crop))
+        assert size(square) == {100, 100}
+
+        # Filled from the crop's middle: a 400 × 400 square of it.
+        {:ok, part} =
+          Operation.extract_area(
+            original,
+            left + div(width - height, 2),
+            top,
+            height,
+            height
+          )
+
+        assert_in_delta mean_of(square), mean(part), 3
+      end
+
+      {:ok, top_left} = Storehouse.variant(file, :square, opts(crop: {0, 0, 0.5, 0.5}))
+      {:ok, bottom_right} = Storehouse.variant(file, :square, opts(crop: {0.5, 0.5, 0.5, 0.5}))
+      assert top_left.key != bottom_right.key
+    end
+
+    test "smaller than the box: never enlarged, in the box's shape", %{original: file} do
+      # 60 × 40 of the original, for a box of 100 × 100: its middle 40 × 40.
+      {:ok, square} = Storehouse.variant(file, :square, opts(crop: {0, 0, 0.05, 0.05}))
+      assert size(square) == {40, 40}
+    end
+
+    test "fitted, with a box of any height", %{original: file} do
+      # The left half: 600 × 800, 320 wide.
+      {:ok, thumb} = Storehouse.variant(file, :thumb, opts(crop: {0, 0, 0.5, 1}))
+      assert size(thumb) == {320, 427}
+    end
+
+    test "of the original upright, as its EXIF turns it" do
+      # 8 × 6, turned: 6 × 8 upright; its top half is 6 × 4.
+      {:ok, turned} = Storehouse.store(Path.join(@fixtures, "turned.jpg"), adapter: Memory)
+
+      {:ok, thumb} =
+        Storehouse.variant(
+          turned,
+          :thumb,
+          opts(presets: [thumb: [width: 6]], crop: {0, 0, 1, 0.5})
+        )
+
+      assert size(thumb) == {6, 4}
     end
   end
 end

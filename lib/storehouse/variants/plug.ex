@@ -18,6 +18,10 @@ defmodule Storehouse.Variants.Plug do
   preset's current URL. The format of a preset of several is chosen by
   the request's `Accept`, with `Vary: Accept`.
 
+  A file's own crop comes in the query, `?crop=x,y,w,h&sig=…`, signed with
+  the configured `:secret`: a crop without its signature, or with a wrong
+  one, gives `404`.
+
   A variant is sent with `Cache-Control: public, max-age=31536000,
   immutable`: its URL changes when its preset does, so a CDN in front
   keeps it for a year.
@@ -53,7 +57,9 @@ defmodule Storehouse.Variants.Plug do
 
   @impl true
   def call(%Plug.Conn{method: method} = conn, opts) when method in ["GET", "HEAD"] do
-    config = Variants.config(Keyword.take(opts, [:presets, :renderer, :prefix, :url, :timeout]))
+    config =
+      Variants.config(Keyword.take(opts, [:presets, :renderer, :prefix, :url, :timeout, :secret]))
+
     at = opts |> Keyword.get(:at, config.url) |> Path.split() |> Enum.reject(&(&1 == "/"))
 
     case Enum.split(conn.path_info, length(at)) do
@@ -73,15 +79,17 @@ defmodule Storehouse.Variants.Plug do
          false <- String.starts_with?(key, config.prefix),
          true <- only?(key, Keyword.get(opts, :only)),
          {:ok, preset, width} <- Variants.preset_for(config, name, width),
-         "image/" <> _ <- Variants.file(key).content_type do
-      variant(conn, key, preset, width, fingerprint, config, opts)
+         "image/" <> _ <- Variants.file(key).content_type,
+         conn = fetch_query_params(conn),
+         {:ok, crop} <- Variants.crop_for(config, key, name, conn.query_params) do
+      variant(conn, key, preset, width, fingerprint, crop, config, opts)
     else
       _not_one -> send_resp(conn, 404, "")
     end
   end
 
-  defp variant(conn, key, preset, width, fingerprint, config, opts) do
-    current = Variants.variant_for(key, preset, width, [], :url)
+  defp variant(conn, key, preset, width, fingerprint, crop, config, opts) do
+    current = Variants.variant_for(key, preset, width, [crop: crop], :url)
 
     if current.fingerprint == fingerprint do
       accept = conn |> get_req_header("accept") |> Enum.join(",")
@@ -92,7 +100,10 @@ defmodule Storehouse.Variants.Plug do
       conn = Storehouse.Purge.put_cache_tag(conn, opts[:cache_tag], key)
 
       key
-      |> Variants.get(preset.name, call_opts ++ [width: width, accept: accept, adapter: adapter])
+      |> Variants.get(
+        preset.name,
+        call_opts ++ [width: width, crop: crop, accept: accept, adapter: adapter]
+      )
       |> sent(conn, preset, adapter)
     else
       conn

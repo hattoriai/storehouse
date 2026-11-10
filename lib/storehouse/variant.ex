@@ -12,6 +12,10 @@ defmodule Storehouse.Variant do
     * `:focus` - what a crop keeps: `:centre`, `:attention` (what stands
       out), `:entropy` (the busiest part), or `{x, y}`, a point in
       fractions of the width and height from the top left.
+    * `:crop` - `nil`, or `{x, y, width, height}`: the part of the upright
+      original the variant is made of, in fractions of its width and
+      height from the top left (a photograph's own crop, an avatar framed
+      by its owner). The box is then filled, or fitted, from that part.
     * `:format` - `:webp`, `:jpeg`, `:png`, `:avif`, `:gif`. For a URL,
       the preset's: `:original` among them, and a list, in order, when the
       format is chosen from the browser's `Accept`.
@@ -38,6 +42,7 @@ defmodule Storehouse.Variant do
     :quality,
     :fingerprint,
     :background,
+    :crop,
     fit: :inside,
     focus: :centre,
     profile: :srgb,
@@ -53,6 +58,7 @@ defmodule Storehouse.Variant do
           height: pos_integer() | nil,
           fit: :inside | :cover,
           focus: :centre | :attention | :entropy | {number(), number()},
+          crop: {float(), float(), float(), float()} | nil,
           format: format() | :original | [format() | :original],
           quality: 1..100 | nil,
           profile: :srgb | :keep,

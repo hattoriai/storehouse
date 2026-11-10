@@ -118,4 +118,11 @@ defmodule Storehouse.ImgproxyTest do
     assert {:error, :not_supported} =
              Storehouse.variant(@file_, :p, presets: [p: [width: 320]], renderer: renderer)
   end
+
+  test "a photograph's own crop, before the resize" do
+    preset = [width: 288, height: 288, fit: :cover, focus: :attention]
+
+    assert url(preset, crop: {0.2, 0.1, 0.5, 0.4}) =~
+             "/c:0.5:0.4:fp:0.45:0.3/rs:fill:288:288/g:ce/"
+  end
 end
